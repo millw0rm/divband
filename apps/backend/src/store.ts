@@ -10,6 +10,10 @@ import type {
   Project,
   ProjectMembership,
   Publish,
+  PublishedFile,
+  PublishedSite,
+  PublishedVersion,
+  UploadSession,
   User,
 } from './models';
 
@@ -28,6 +32,10 @@ export interface BackendStore {
   auditEvents: AuditEvent[];
   aiChangeRequests: Map<string, AiChangeRequest>;
   publishes: Map<string, Publish>;
+  publishedSites: Map<string, PublishedSite>;
+  publishedVersions: Map<string, PublishedVersion>;
+  publishedFiles: PublishedFile[];
+  uploadSessions: Map<string, UploadSession>;
 }
 
 export function createBackendStore(): BackendStore {
@@ -46,6 +54,10 @@ export function createBackendStore(): BackendStore {
     auditEvents: [],
     aiChangeRequests: new Map(),
     publishes: new Map(),
+    publishedSites: new Map(),
+    publishedVersions: new Map(),
+    publishedFiles: [],
+    uploadSessions: new Map(),
   };
 }
 
