@@ -1,4 +1,43 @@
 ---
+- name: Ensure divband namespace exists before kubeconfig hand-off
+  ansible.builtin.command:
+    cmd: "kubectl create namespace {{ divband_namespace }} --dry-run=client -o yaml"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: divband_namespace_manifest
+  changed_when: false
+
+- name: Apply divband namespace before kubeconfig hand-off
+  ansible.builtin.command:
+    cmd: kubectl apply -f -
+    stdin: "{{ divband_namespace_manifest.stdout }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: divband_namespace_apply
+  changed_when: "'configured' in divband_namespace_apply.stdout or 'created' in divband_namespace_apply.stdout"
+
+- name: Create backend kubeconfig secret
+  ansible.builtin.command:
+    cmd: >-
+      kubectl -n {{ divband_namespace }} create secret generic {{ divband_kubeconfig_secret_name }}
+      --from-file=config={{ kubernetes_kubeconfig_export_path | default('/etc/rancher/k3s/divband-kubeconfig.yaml') }}
+      --dry-run=client -o yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: divband_kubeconfig_secret_manifest
+  changed_when: false
+  no_log: true
+
+- name: Apply backend kubeconfig secret
+  ansible.builtin.command:
+    cmd: kubectl apply -f -
+    stdin: "{{ divband_kubeconfig_secret_manifest.stdout }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: divband_kubeconfig_secret_apply
+  changed_when: "'configured' in divband_kubeconfig_secret_apply.stdout or 'created' in divband_kubeconfig_secret_apply.stdout"
+  no_log: true
+
 - name: Render divband control plane manifests
   ansible.builtin.template:
     src: control-plane.yml.j2
