@@ -37,6 +37,16 @@ For each project, Terraform provisions:
 2. Replace placeholder tokens and secrets with values from the platform secret store.
 3. Run `terraform init` and `terraform plan` from `infra/gitlab/terraform`.
 4. Store sensitive Terraform outputs, especially project access tokens and runner authentication tokens, in the platform secret store immediately.
-5. Install each dedicated runner pod or VM with the matching runner authentication token and tag.
+5. Install each dedicated runner pod or VM with the matching runner authentication token and tag by running the Ansible runner playbook in `infra/ansible/playbooks/runners.yml`.
+
+## Runner token handoff to the platform secret store
+
+The `runner_authentication_tokens` output in `terraform/outputs.tf` is sensitive and exists to bridge Terraform provisioning to runner installation. After `terraform apply`:
+
+```sh
+terraform -chdir=infra/gitlab/terraform output -json runner_authentication_tokens
+```
+
+Copy each `tenant/project` value into the platform secret store path used by operations, for example `divband/gitlab/runners/<tenant>/<project>/token`, then expose it to Ansible as `vault_gitlab_runner_token` for the matching runner host. During a single protected bootstrap run, `infra/ansible/roles/gitlab_runner` can also read the Terraform output directly when `gitlab_runner_project_key` is set, but long-lived credentials should live in the secret store rather than in Terraform logs, inventories, or shell history.
 
 Do not reuse runner tags, runner tokens, deploy keys, or project access tokens between divband projects.

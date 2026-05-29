@@ -1,0 +1,6 @@
+---
+- name: Register GitLab runners
+  hosts: runners
+  become: true
+  roles:
+    - role: gitlab_runner

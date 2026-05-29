@@ -1,7 +1,14 @@
 ---
+- name: Validate GitLab Runner project mapping
+  ansible.builtin.assert:
+    that:
+      - gitlab_url | length > 0
+      - gitlab_runner_project_key | length > 0 or gitlab_runner_token != 'REPLACE_WITH_RUNNER_AUTHENTICATION_TOKEN'
+    fail_msg: "Set gitlab_runner_project_key to a Terraform project key, or provide gitlab_runner_token from the platform secret store."
+
 - name: Read runner authentication tokens from GitLab Terraform outputs
   ansible.builtin.command:
-    cmd: terraform output -json runner_authentication_tokens
+    cmd: "terraform output -json {{ gitlab_runner_token_output_name }}"
     chdir: "{{ gitlab_runner_terraform_dir }}"
   delegate_to: localhost
   become: false
@@ -20,6 +27,85 @@
     - gitlab_runner_project_key | length > 0
     - gitlab_runner_terraform_tokens is defined
     - gitlab_runner_terraform_tokens.stdout is defined
+
+- name: Read project metadata from GitLab Terraform outputs
+  ansible.builtin.command:
+    cmd: "terraform output -json {{ gitlab_runner_projects_output_name }}"
+    chdir: "{{ gitlab_runner_terraform_dir }}"
+  delegate_to: localhost
+  become: false
+  register: gitlab_runner_terraform_projects
+  changed_when: false
+  when:
+    - gitlab_runner_project_key | length > 0
+    - gitlab_runner_tags | length == 0
+
+- name: Select this project's runner tag
+  ansible.builtin.set_fact:
+    gitlab_runner_resolved_tags: "{{ [((gitlab_runner_terraform_projects.stdout | from_json)[gitlab_runner_project_key]).runner_tag] + gitlab_runner_extra_tags }}"
+  when:
+    - gitlab_runner_project_key | length > 0
+    - gitlab_runner_tags | length == 0
+    - gitlab_runner_terraform_projects is defined
+    - gitlab_runner_terraform_projects.stdout is defined
+
+- name: Use explicitly configured runner tags
+  ansible.builtin.set_fact:
+    gitlab_runner_resolved_tags: "{{ gitlab_runner_tags + gitlab_runner_extra_tags }}"
+  when: gitlab_runner_tags | length > 0
+
+- name: Validate runner tags and untagged job policy
+  ansible.builtin.assert:
+    that:
+      - gitlab_runner_resolved_tags | default([]) | length > 0
+      - gitlab_runner_resolved_tags | select('match', '^divband-[a-z0-9][a-z0-9-]*$') | list | length == gitlab_runner_resolved_tags | length
+      - not (gitlab_runner_run_untagged | bool)
+    fail_msg: "GitLab runners must use project-specific divband-* tags and keep gitlab_runner_run_untagged set to false."
+
+- name: Install GitLab Runner repository prerequisites on Debian hosts
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+    state: present
+    update_cache: true
+  when:
+    - gitlab_runner_install_repository
+    - ansible_os_family == 'Debian'
+
+- name: Download GitLab Runner package repository installer on Debian hosts
+  ansible.builtin.get_url:
+    url: "{{ gitlab_runner_repository_script_url_debian }}"
+    dest: "{{ gitlab_runner_repository_script_path }}"
+    mode: '0755'
+  when:
+    - gitlab_runner_install_repository
+    - ansible_os_family == 'Debian'
+
+- name: Configure GitLab Runner package repository on Debian hosts
+  ansible.builtin.command: "bash {{ gitlab_runner_repository_script_path }}"
+  args:
+    creates: /etc/apt/sources.list.d/runner_gitlab-runner.list
+  when:
+    - gitlab_runner_install_repository
+    - ansible_os_family == 'Debian'
+
+- name: Download GitLab Runner package repository installer on RedHat hosts
+  ansible.builtin.get_url:
+    url: "{{ gitlab_runner_repository_script_url_redhat }}"
+    dest: "{{ gitlab_runner_repository_script_path }}"
+    mode: '0755'
+  when:
+    - gitlab_runner_install_repository
+    - ansible_os_family == 'RedHat'
+
+- name: Configure GitLab Runner package repository on RedHat hosts
+  ansible.builtin.command: "bash {{ gitlab_runner_repository_script_path }}"
+  args:
+    creates: /etc/yum.repos.d/runner_gitlab-runner.repo
+  when:
+    - gitlab_runner_install_repository
+    - ansible_os_family == 'RedHat'
 
 - name: Install GitLab Runner
   ansible.builtin.package:
@@ -40,7 +126,7 @@
     --token {{ gitlab_runner_token }}
     --executor {{ gitlab_runner_executor }}
     --description {{ gitlab_runner_description }}
-    --tag-list {{ gitlab_runner_tags | join(',') }}
+    --tag-list {{ gitlab_runner_resolved_tags | join(',') }}
     --locked={{ gitlab_runner_locked | lower }}
     --run-untagged={{ gitlab_runner_run_untagged | lower }}
     {% if gitlab_runner_executor == 'kubernetes' %}
