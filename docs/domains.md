@@ -86,6 +86,26 @@ relying on provider-backed availability, DNSSEC support, record replication, and
 abuse controls. It also means delegated DNS data/API model work and provider
 adapter implementation can proceed against the managed-provider assumption.
 
+
+### Managed DNS provider adapter
+
+Delegated DNS is implemented through a backend provider adapter rather than direct
+calls from domain business logic to a specific DNS vendor. The adapter contract
+supports these managed operations:
+
+- create, update, and delete delegated customer zones or sub-zones;
+- read provider-assigned nameservers so the API can return exact `NS`
+  instructions;
+- upsert `_divband` TXT ownership-verification records;
+- upsert application routing records for the attached hostname;
+- upsert wildcard records for delegated subdomains; and
+- upsert `_acme-challenge` TXT records for DNS-01 certificate validation.
+
+Provider credentials stay in backend configuration or secret storage. The domain
+lifecycle code receives a configured adapter and only works with the neutral
+managed-DNS interface, so changing the managed DNS vendor does not require
+hard-coding provider APIs into domain ownership, verification, or routing rules.
+
 ## Backend domain model
 
 The backend should store one row per requested hostname. Suggested fields:

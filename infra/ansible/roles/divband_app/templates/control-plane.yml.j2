@@ -30,6 +30,9 @@ stringData:
   GITLAB_NAMESPACE_ID: {{ divband_gitlab_namespace_id | string | to_json }}
 {% endif %}
   DIVBAND_TOKEN_HASH_PEPPER: {{ divband_token_hash_pepper | string | to_json }}
+{% if divband_dns_provider_token | string | trim | length > 0 %}
+  DNS_PROVIDER_TOKEN: {{ divband_dns_provider_token | string | to_json }}
+{% endif %}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -67,6 +70,16 @@ spec:
               value: {{ divband_object_storage_endpoint | string | to_json }}
             - name: OBJECT_STORAGE_REGION
               value: {{ divband_object_storage_region | string | to_json }}
+            - name: DNS_PROVIDER
+              value: {{ divband_dns_provider | string | to_json }}
+            - name: DNS_PROVIDER_ENDPOINT
+              value: {{ divband_dns_provider_endpoint | string | to_json }}
+            - name: DNS_PROVIDER_DEFAULT_TTL_SECONDS
+              value: {{ divband_dns_provider_default_ttl_seconds | string | to_json }}
+            - name: DNS_PROVIDER_PLATFORM_INGRESS_TARGET
+              value: {{ divband_dns_provider_platform_ingress_target | string | to_json }}
+            - name: DNS_PROVIDER_APEX_RECORD_TYPE
+              value: {{ divband_dns_provider_apex_record_type | string | to_json }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -113,6 +126,13 @@ spec:
                 secretKeyRef:
                   name: divband-backend-env
                   key: DIVBAND_TOKEN_HASH_PEPPER
+{% if divband_dns_provider_token | string | trim | length > 0 %}
+            - name: DNS_PROVIDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: divband-backend-env
+                  key: DNS_PROVIDER_TOKEN
+{% endif %}
 {% set reserved_env = [
   'API_BASE_URL',
   'PUBLIC_SITE_DOMAIN',
@@ -123,6 +143,12 @@ spec:
   'OBJECT_STORAGE_ACCESS_KEY_ID',
   'OBJECT_STORAGE_SECRET_ACCESS_KEY',
   'DATABASE_URL',
+  'DNS_PROVIDER',
+  'DNS_PROVIDER_ENDPOINT',
+  'DNS_PROVIDER_TOKEN',
+  'DNS_PROVIDER_DEFAULT_TTL_SECONDS',
+  'DNS_PROVIDER_PLATFORM_INGRESS_TARGET',
+  'DNS_PROVIDER_APEX_RECORD_TYPE',
   'GITLAB_URL',
   'GITLAB_TOKEN',
   'GITLAB_ACCESS_TOKEN',

@@ -4,16 +4,22 @@ import { URL } from 'node:url';
 import { BackendService } from './backend-service.ts';
 import { loadBackendConfig } from './config.ts';
 import { createObjectStorage } from './services/object-storage.ts';
+import { createManagedDnsProvider } from './services/managed-dns.ts';
 import { createRuntimeStore } from './runtime-store.ts';
 import type { ApiRequest, ApiResponse } from './models.ts';
 
 const config = loadBackendConfig();
 const runtimeStore = await createRuntimeStore(config.databaseUrl);
 const objectStorage = createObjectStorage(config.objectStorage, `https://${config.uploadDomain}`);
+const managedDnsProvider = createManagedDnsProvider(config.managedDns);
 const backend = new BackendService(runtimeStore.store, {
   apiBaseUrl: config.apiBaseUrl,
   publicSiteDomain: config.publicSiteDomain,
   objectStorage,
+  managedDnsProvider,
+  managedDnsDefaultTtlSeconds: config.managedDns.defaultTtlSeconds,
+  managedDnsPlatformIngressTarget: config.managedDns.platformIngressTarget,
+  managedDnsApexRecordType: config.managedDns.apexRecordType,
 });
 
 const server = createServer(async (nodeRequest, nodeResponse) => {

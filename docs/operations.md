@@ -161,7 +161,9 @@ keeps per-project modules as contracts to avoid duplicate ownership.
   API worker should apply manifests directly.
 - DNS verification uses public TXT lookups. The `.test` and manual observed-token
   shortcuts are disabled unless `DIVBAND_ALLOW_TEST_DNS_VERIFICATION=true` is set
-  in a non-production test environment.
+  in a non-production test environment. Delegated managed DNS uses the configured
+  `DNS_PROVIDER` adapter; credentials such as `DNS_PROVIDER_TOKEN` must come from
+  backend secrets, not tenant input or domain business logic.
 
 ### Flow
 
@@ -189,10 +191,12 @@ keeps per-project modules as contracts to avoid duplicate ownership.
    `/projects/{id}/deployments/report` with pipeline IDs, commit SHAs, image
    digests, ingress hostname, health-check URL, and rollout state.
 6. **Verify custom domains.** `POST /projects/{id}/domains` returns a TXT record
-   named `_divband-challenge.<hostname>` with value
-   `divband-verification=<token>`. `POST /projects/{id}/domains/{domainId}/verify`
-   performs a real TXT lookup before marking the domain verified and requesting
-   certificate issuance.
+   named `_divband.<hostname>` with value `divband-verification=<token>`. For
+   delegated zones, the managed-DNS adapter creates that TXT record and later
+   creates hostname, wildcard, and DNS-01 records through the same provider
+   abstraction. `POST /projects/{id}/domains/{domainId}/verify` performs a real
+   TXT lookup before marking the domain verified and requesting certificate
+   issuance.
 7. **Track certificate readiness.** Certificate status is read from cert-manager
    `Certificate` resources or ingress/Gateway readiness labels when Kubernetes is
    the provider. If `CERTIFICATE_STATUS_PROVIDER=dns_provider`, the configured
@@ -213,7 +217,8 @@ keeps per-project modules as contracts to avoid duplicate ownership.
   --dry-run=server -f -` and check admission, quota, External Secrets, and
   cert-manager prerequisites.
 - If DNS verification fails, query the TXT record with `dig TXT
-  _divband-challenge.<hostname>` and wait for DNS propagation before retrying.
+  _divband.<hostname>` and wait for DNS propagation before retrying. Legacy
+  `_divband-challenge.<hostname>` records are still accepted during migration.
 - If certificate issuance stays pending, inspect cert-manager `Certificate`,
   `CertificateRequest`, `Order`, and `Challenge` resources and confirm the
   ingress or Gateway route references the expected hostname and TLS secret.
