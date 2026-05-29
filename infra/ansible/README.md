@@ -7,14 +7,16 @@
 - `ansible.cfg` — local defaults that point Ansible at `inventory.yml` and `roles/`.
 - `inventory.example.yml` — copyable inventory with the expected host groups: `control_plane`, `workers`, `gitlab`, `runners`, `load_balancers`, and `monitoring`.
 - `playbooks/site.yml` — main entry point for a full environment bootstrap.
+- `playbooks/gitlab.yml` — targeted entry point for GitLab host installation or existing-endpoint configuration.
+- `playbooks/runners.yml` — targeted entry point for installing and registering GitLab Runner hosts.
 - `roles/common` — admin users, SSH hardening, firewall rules, base packages, and time sync.
 - `roles/container_runtime` — installs `containerd` by default or Docker when `container_runtime_engine: docker` is set.
 - `roles/kubernetes` — installs k3s control-plane and worker nodes. The role is intentionally isolated so it can be extended for kubeadm later.
 - `roles/ingress` — installs the nginx ingress controller.
 - `roles/cert_manager` — installs cert-manager and applies an ACME `ClusterIssuer`.
 - `roles/external_secrets` — installs External Secrets Operator and configures a `ClusterSecretStore`.
-- `roles/gitlab` — connects to an existing GitLab endpoint, optionally installs GitLab, and can run the Terraform stack under `../gitlab/terraform`.
-- `roles/gitlab_runner` — registers runners with the authentication tokens produced by GitLab provisioning.
+- `roles/gitlab` — connects to an existing GitLab endpoint, installs self-hosted GitLab when `gitlab_mode: install` is selected, and can run the Terraform stack under `../gitlab/terraform`.
+- `roles/gitlab_runner` — installs GitLab Runner, resolves project runner tags and authentication tokens from Terraform outputs, disables untagged jobs, and registers dedicated runners.
 - `roles/divband_app` — deploys the backend/frontend control plane and points the backend at the Kubernetes template renderer.
 
 ## Integration points
@@ -90,9 +92,10 @@ Required or commonly customized variables:
 | `kubernetes_api_endpoint` | API endpoint workers use to join the cluster, usually the first control-plane IP or a load balancer. |
 | `cert_manager_acme_email`, `cert_manager_acme_server`, `cert_manager_cluster_issuer` | ACME account and issuer settings. |
 | `external_secrets_store_name` and provider settings | Must match the `REPLACE_WITH_CLUSTER_SECRET_STORE` value expected by `infra/k8s/base/external-secret.yaml`. |
-| `gitlab_url`, `gitlab_terraform_dir`, `gitlab_run_terraform` | GitLab endpoint and optional Terraform automation settings. |
-| `gitlab_runner_token` | Runner authentication token created by GitLab provisioning. Use Vault or set `gitlab_runner_project_key` to read `runner_authentication_tokens` from Terraform outputs. |
-| `gitlab_runner_project_key` | Optional key in the GitLab Terraform `runner_authentication_tokens` output for this runner. |
+| `gitlab_mode`, `gitlab_url`, `gitlab_external_url`, `gitlab_terraform_dir`, `gitlab_run_terraform` | Use `gitlab_mode: install` to self-host GitLab on the `gitlab` group, or `gitlab_mode: connect` to point Divband at an existing GitLab URL. |
+| `gitlab_runner_project_key` | Required per runner host unless `gitlab_runner_token` is supplied from Vault. Use the Terraform project key, for example `acme/marketing`. |
+| `gitlab_runner_token` | Runner authentication token created by GitLab provisioning. Use Vault/platform secrets for normal runs; the role can also read `runner_authentication_tokens` from Terraform outputs when `gitlab_runner_project_key` is set. |
+| `gitlab_runner_tags` | Optional override for runner tags. Leave empty to use the project-specific `divband-*` tag exported by Terraform. |
 | `divband_backend_image`, `divband_frontend_image` | Images for the backend/frontend control-plane deployment. |
 
 Recommended Vault file example:
@@ -108,6 +111,40 @@ Create and edit a Vault file:
 ```sh
 ansible-vault create infra/ansible/group_vars/all/vault.yml
 ```
+
+
+## GitLab host and runner automation
+
+Use the targeted playbooks when operating GitLab separately from the Kubernetes bootstrap:
+
+```sh
+cd infra/ansible
+ansible-playbook -i inventory.yml playbooks/gitlab.yml --ask-vault-pass
+ansible-playbook -i inventory.yml playbooks/runners.yml --ask-vault-pass
+```
+
+For self-hosted GitLab, set `gitlab_mode: install` for hosts in the `gitlab` group. The role configures the official package repository, installs the Omnibus package, writes `external_url`, and runs `gitlab-ctl reconfigure`. For an existing GitLab service, keep `gitlab_mode: connect` and set `gitlab_url`; the role only records the endpoint and can run Terraform provisioning from the operator workstation when `gitlab_run_terraform: true`.
+
+Runner hosts should be one-to-one with Terraform project keys whenever practical:
+
+```yaml
+runners:
+  hosts:
+    runner-acme-marketing:
+      ansible_host: 10.0.30.11
+      gitlab_runner_project_key: acme/marketing
+```
+
+With `gitlab_runner_project_key` set, the runner role reads `runner_authentication_tokens` and `projects` from `infra/gitlab/terraform/outputs.tf`, selects the matching token and project-specific `divband-*` tag, and registers the runner with `--run-untagged=false`.
+
+### Runner token secret-store handoff
+
+`runner_authentication_tokens` is a sensitive Terraform output. Treat Terraform output as the short-lived handoff boundary and move each value into the platform secret store immediately after apply:
+
+1. Run `terraform -chdir=infra/gitlab/terraform output -json runner_authentication_tokens` only from a trusted operator workstation or CI job with protected logs.
+2. Write each `tenant/project` token into the platform secret store path used for Ansible Vault or your external secret backend, for example `divband/gitlab/runners/acme/marketing/token`.
+3. Reference that stored value as `vault_gitlab_runner_token` in host/group vars, or allow the runner playbook to read the Terraform output directly during the same protected provisioning run.
+4. Do not commit tokens to inventory, Terraform variable files, or runner configuration examples.
 
 ## 4. Install Ansible dependencies
 
@@ -130,6 +167,8 @@ Useful targeted runs:
 
 ```sh
 ansible-playbook -i inventory.yml playbooks/site.yml --limit control_plane --ask-vault-pass
+ansible-playbook -i inventory.yml playbooks/gitlab.yml --ask-vault-pass
+ansible-playbook -i inventory.yml playbooks/runners.yml --ask-vault-pass
 ansible-playbook -i inventory.yml playbooks/site.yml --limit runners --ask-vault-pass
 ```
 

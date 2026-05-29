@@ -31,12 +31,11 @@ all:
     external_secrets_vault_server: https://vault.divband.ir
     external_secrets_vault_path: secret
 
+    gitlab_mode: connect
     gitlab_url: https://git.divband.ir
+    gitlab_external_url: "{{ gitlab_url }}"
     gitlab_terraform_dir: "{{ playbook_dir }}/../../gitlab/terraform"
     gitlab_runner_executor: kubernetes
-    gitlab_runner_tags:
-      - divband
-      - kubernetes
 
     divband_namespace: divband-system
     divband_backend_image: registry.gitlab.com/divband/control-plane/backend:latest
@@ -60,8 +59,9 @@ all:
           ansible_host: 192.0.2.30
     runners:
       hosts:
-        runner-1:
+        runner-acme-marketing:
           ansible_host: 192.0.2.40
+          gitlab_runner_project_key: acme/marketing
     load_balancers:
       hosts:
         lb-1:
