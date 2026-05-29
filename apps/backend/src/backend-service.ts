@@ -26,6 +26,8 @@ import type {
   PlatformAdminRole,
   ProjectMembership,
   PublishRequest,
+  TenantPlan,
+  TenantPlanTier,
   User,
 } from './models.ts';
 import { defaultStore, type BackendStore } from './store.ts';
@@ -36,6 +38,7 @@ import { DeploymentStatusService, type DeploymentStatusReport } from './services
 import { DnsVerificationService } from './services/dns-verification.ts';
 import { GitLabService } from './services/gitlab.ts';
 import { KubernetesService } from './services/kubernetes.ts';
+import { RateLimitService } from './services/rate-limit.ts';
 import { PublishingService, type PublishingServiceOptions } from './services/publishing.ts';
 import { ProjectSecretService } from './services/secrets.ts';
 import { createId, normalizeSlug, nowIso } from './utils.ts';
@@ -66,10 +69,12 @@ export class BackendService {
   private readonly kubernetes = new KubernetesService();
   private readonly publishing: PublishingService;
   private readonly secrets: ProjectSecretService;
+  private readonly rateLimits: RateLimitService;
 
   constructor(private readonly store: BackendStore = defaultStore, publishingOptions: PublishingServiceOptions = {}) {
     this.auth = new AuthService(store);
     this.audit = new AuditLogService(store);
+    this.rateLimits = new RateLimitService(store);
     this.secrets = new ProjectSecretService(store);
     this.publishing = new PublishingService(store, publishingOptions);
   }
@@ -78,6 +83,7 @@ export class BackendService {
     try {
       const route = this.parsePath(request.path);
       const method = request.method.toUpperCase();
+      this.applyRateLimit(method, route, request);
 
       if (method === 'POST' && this.matches(route, 'auth', 'register')) {
         const result = this.auth.register(this.registerInput(request.body));
@@ -87,6 +93,29 @@ export class BackendService {
         }
         this.audit.record(result.user.id, 'user.registered', { email: result.user.email });
         return this.created(this.authResponse(result));
+      }
+
+      if (method === 'POST' && this.matches(route, 'auth', 'verify-email')) {
+        const token = this.stringField(this.requiredObject(request.body), 'token', 'Email verification token is required.');
+        const user = this.auth.verifyEmail(token);
+        this.audit.record(user.id, 'user.email_verified', { email: user.email });
+        return this.ok({ user });
+      }
+
+      if (method === 'POST' && this.matches(route, 'auth', 'password-reset', 'request')) {
+        const email = this.stringField(this.requiredObject(request.body), 'email', 'Email is required.');
+        const result = this.auth.requestPasswordReset(email);
+        if (result.challenge) {
+          this.audit.record(result.challenge.userId, 'user.password_reset_requested', { challengeId: result.challenge.id });
+        }
+        return this.ok({ ok: true, resetToken: result.token });
+      }
+
+      if (method === 'POST' && this.matches(route, 'auth', 'password-reset', 'confirm')) {
+        const body = this.requiredObject(request.body);
+        const user = this.auth.resetPassword(this.stringField(body, 'token', 'Password reset token is required.'), this.stringField(body, 'password', 'Password is required.'));
+        this.audit.record(user.id, 'user.password_reset_completed', {});
+        return this.ok({ user });
       }
 
       if (method === 'POST' && this.matches(route, 'auth', 'login')) {
@@ -168,6 +197,7 @@ export class BackendService {
 
       const actor = this.auth.authenticate(request.headers?.authorization ?? request.headers?.Authorization);
       const user = actor.user;
+      this.requireVerifiedAccount(actor);
 
       if (route.segments[0] === 'admin') {
         return this.handleAdminRoute(method, route, actor, request.body);
@@ -415,6 +445,14 @@ export class BackendService {
       return this.created({ abuseAction: this.createAbuseAction(actor.user, this.requiredObject(body)) });
     }
 
+    if (method === 'GET' && resource === 'monitoring' && route.segments[2] === 'signals') {
+      return this.ok({ signals: this.monitoringSignals() });
+    }
+
+    if (method === 'PUT' && resource === 'billing' && route.segments[2] === 'organizations' && route.segments[3]) {
+      return this.ok({ organization: this.updateOrganizationBilling(route.segments[3], this.requiredObject(body), actor.user) });
+    }
+
     if (method === 'GET' && resource === 'platform-admins') {
       return this.ok({ platformAdmins: [...this.store.platformAdmins.values()].filter((admin) => !admin.revokedAt) });
     }
@@ -528,6 +566,14 @@ export class BackendService {
   }
 
   private applyAbuseAction(abuseAction: AbuseAction): void {
+    if (abuseAction.action === 'restrict_deployments' && abuseAction.targetType === 'project') {
+      const project = this.store.projects.get(abuseAction.targetId);
+      if (project) {
+        project.deploymentRestrictedAt = abuseAction.createdAt;
+        project.deploymentRestrictionReason = abuseAction.reason;
+      }
+      return;
+    }
     if (abuseAction.action !== 'suspend' && abuseAction.action !== 'unsuspend') {
       return;
     }
@@ -577,6 +623,8 @@ export class BackendService {
     }
 
     const organization = typeof body.organizationId === 'string' ? this.requireOrganizationForUser(body.organizationId, user) : this.ensurePersonalOrganization(user).organization;
+    this.requireTenantActive(organization);
+    this.requireProjectQuota(organization);
     const plan = createProjectLifecyclePlan(slug, `${organization.slug}/${user.id}`);
     const timestamp = nowIso();
     const project: Project = {
@@ -654,6 +702,7 @@ export class BackendService {
   }
 
   private addCustomDomain(project: Project, user: User, body: Record<string, unknown>): ProjectDomain {
+    this.requireDomainQuota(project);
     const hostname = typeof body.hostname === 'string' ? body.hostname.trim().toLowerCase() : '';
     if (!hostname || !hostname.includes('.')) {
       throw new Error('A valid hostname is required.');
@@ -691,7 +740,19 @@ export class BackendService {
     return domain;
   }
 
+
+  private detectHostedAppAbuse(body: Record<string, unknown>): void {
+    const image = typeof body.image === 'string' ? body.image.toLowerCase() : '';
+    const gitRef = typeof body.gitRef === 'string' ? body.gitRef.toLowerCase() : '';
+    const marker = `${image} ${gitRef}`;
+    if (/(phish|malware|crypto-miner|botnet|spam)/u.test(marker)) {
+      throw new Error('Deployment blocked by hosted-app abuse detection.');
+    }
+  }
+
   private triggerDeployment(project: Project, user: User, body: Record<string, unknown>): Deployment {
+    this.requireDeploymentAllowed(project);
+    this.detectHostedAppAbuse(body);
     const gitRef = typeof body.gitRef === 'string' ? body.gitRef : 'main';
     const commitSha = typeof body.commitSha === 'string' ? body.commitSha : undefined;
     const deployment = this.deployments.trigger(project, gitRef, commitSha);
@@ -1049,7 +1110,7 @@ export class BackendService {
       throw new Error('Organization slug is required.');
     }
     const timestamp = nowIso();
-    const organization: Organization = { id: createId('org'), name, slug, createdAt: timestamp, updatedAt: timestamp };
+    const organization: Organization = { id: createId('org'), name, slug, createdAt: timestamp, updatedAt: timestamp, billingTier: 'free', billingStatus: 'trialing' };
     const membership: OrganizationMembership = { id: createId('org_member'), organizationId: organization.id, userId: user.id, role: 'owner', createdAt: timestamp };
     this.store.organizations.set(organization.id, organization);
     this.store.organizationMemberships.set(membership.id, membership);
@@ -1071,6 +1132,8 @@ export class BackendService {
       slug: normalizeSlug(`${user.name}-${user.id}`) || user.id,
       createdAt: timestamp,
       updatedAt: timestamp,
+      billingTier: 'free',
+      billingStatus: 'trialing',
     };
     const membership: OrganizationMembership = { id: createId('org_member'), organizationId: organization.id, userId: user.id, role: 'owner', createdAt: timestamp };
     this.store.organizations.set(organization.id, organization);
@@ -1094,8 +1157,8 @@ export class BackendService {
     return [...this.store.organizations.values()].filter((organization) => organizationIds.has(organization.id));
   }
 
-  private authResponse(result: { user: User; session: AuthSession; token: string; tokenType: 'Bearer' }): { user: User; session: Omit<AuthSession, 'tokenHash'>; token: string; tokenType: 'Bearer' } {
-    return { user: result.user, session: this.redactSession(result.session), token: result.token, tokenType: result.tokenType };
+  private authResponse(result: { user: User; session: AuthSession; token: string; tokenType: 'Bearer'; emailVerificationToken?: string }): { user: User; session: Omit<AuthSession, 'tokenHash'>; token: string; tokenType: 'Bearer'; emailVerificationToken?: string } {
+    return { user: result.user, session: this.redactSession(result.session), token: result.token, tokenType: result.tokenType, emailVerificationToken: result.emailVerificationToken };
   }
 
   private redactSession(session: AuthSession): Omit<AuthSession, 'tokenHash'> {
@@ -1138,6 +1201,139 @@ export class BackendService {
     project.updatedAt = nowIso();
   }
 
+
+  private applyRateLimit(method: string, route: RouteMatch, request: ApiRequest): void {
+    const client = this.clientIp(request);
+    if (route.segments[0] === 'auth') {
+      this.rateLimits.consume({ key: `auth:${client}:${route.segments.join('/')}`, limit: 20, windowSeconds: 60, blockSeconds: 300 });
+    }
+    if (this.isPublishingRoute(route) && (method === 'POST' || method === 'PUT')) {
+      this.rateLimits.consume({ key: `publish:${client}`, limit: 30, windowSeconds: 60 * 60, blockSeconds: 60 * 60 });
+    }
+    if (route.segments[0] === 'projects' && route.segments.includes('deployments') && method === 'POST') {
+      this.rateLimits.consume({ key: `deploy:${client}`, limit: 60, windowSeconds: 60 * 60, blockSeconds: 15 * 60 });
+    }
+  }
+
+  private clientIp(request: ApiRequest): string {
+    const forwarded = request.headers?.['x-forwarded-for'] ?? request.headers?.['X-Forwarded-For'];
+    return (forwarded?.split(',')[0]?.trim() || request.headers?.['x-real-ip'] || request.headers?.['X-Real-IP'] || 'unknown').toString();
+  }
+
+  private requireVerifiedAccount(actor: AuthActor): void {
+    if (!actor.user.emailVerifiedAt) {
+      throw new Error('Email verification is required before using authenticated platform features.');
+    }
+  }
+
+  private stringField(body: Record<string, unknown>, field: string, message: string): string {
+    const value = body[field];
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new Error(message);
+    }
+    return value;
+  }
+
+  private planFor(tier: TenantPlanTier | undefined, billingStatus: TenantPlan['billingStatus'] | undefined): TenantPlan {
+    const normalizedTier = tier ?? 'free';
+    const planLimits = {
+      free: { maxProjects: 3, maxCustomDomains: 1, maxMonthlyDeployments: 100, maxPublishedSites: 3, maxPublishBytes: 1024 * 1024 * 1024 },
+      pro: { maxProjects: 25, maxCustomDomains: 10, maxMonthlyDeployments: 1_000, maxPublishedSites: 25, maxPublishBytes: 25 * 1024 * 1024 * 1024 },
+      team: { maxProjects: 250, maxCustomDomains: 100, maxMonthlyDeployments: 10_000, maxPublishedSites: 250, maxPublishBytes: 250 * 1024 * 1024 * 1024 },
+    }[normalizedTier];
+    return { tier: normalizedTier, billingStatus: billingStatus ?? 'trialing', ...planLimits };
+  }
+
+  private requireTenantActive(organization: Organization): void {
+    if (organization.suspendedAt) {
+      throw new Error('Organization is suspended.');
+    }
+    const plan = this.planFor(organization.billingTier, organization.billingStatus);
+    if (plan.billingStatus === 'past_due' || plan.billingStatus === 'cancelled') {
+      throw new Error('Billing must be active before creating or changing hosted resources.');
+    }
+  }
+
+  private requireProjectQuota(organization: Organization): void {
+    const plan = this.planFor(organization.billingTier, organization.billingStatus);
+    const activeProjects = [...this.store.projects.values()].filter((project) => project.organizationId === organization.id && project.status !== 'archived').length;
+    if (activeProjects >= plan.maxProjects) {
+      throw new Error(`Tenant project quota exceeded for ${plan.tier} plan.`);
+    }
+  }
+
+  private requireDomainQuota(project: Project): void {
+    const organization = this.store.organizations.get(project.organizationId);
+    if (!organization) {
+      throw new Error('Organization not found.');
+    }
+    this.requireTenantActive(organization);
+    const plan = this.planFor(organization.billingTier, organization.billingStatus);
+    if (project.domains.length >= plan.maxCustomDomains) {
+      throw new Error(`Custom-domain quota exceeded for ${plan.tier} plan.`);
+    }
+  }
+
+  private requireDeploymentAllowed(project: Project): void {
+    const organization = this.store.organizations.get(project.organizationId);
+    if (!organization) {
+      throw new Error('Organization not found.');
+    }
+    this.requireTenantActive(organization);
+    if (project.suspendedAt) {
+      throw new Error('Project is suspended.');
+    }
+    if (project.deploymentRestrictedAt) {
+      throw new Error('Project deployments are restricted by the abuse team.');
+    }
+    const plan = this.planFor(organization.billingTier, organization.billingStatus);
+    const monthPrefix = new Date().toISOString().slice(0, 7);
+    const monthlyDeployments = project.deployments.filter((deployment) => deployment.startedAt?.startsWith(monthPrefix)).length;
+    if (monthlyDeployments >= plan.maxMonthlyDeployments) {
+      throw new Error(`Monthly deployment quota exceeded for ${plan.tier} plan.`);
+    }
+  }
+
+  private updateOrganizationBilling(organizationId: string, body: Record<string, unknown>, actor: User): Organization {
+    const organization = this.store.organizations.get(organizationId);
+    if (!organization) {
+      throw new Error('Organization not found.');
+    }
+    const tier = typeof body.billingTier === 'string' ? body.billingTier : organization.billingTier ?? 'free';
+    const status = typeof body.billingStatus === 'string' ? body.billingStatus : organization.billingStatus ?? 'trialing';
+    if (tier !== 'free' && tier !== 'pro' && tier !== 'team') {
+      throw new Error('Invalid billing tier.');
+    }
+    if (status !== 'trialing' && status !== 'active' && status !== 'past_due' && status !== 'cancelled') {
+      throw new Error('Invalid billing status.');
+    }
+    organization.billingTier = tier;
+    organization.billingStatus = status;
+    organization.billingCustomerId = typeof body.billingCustomerId === 'string' ? body.billingCustomerId : organization.billingCustomerId;
+    organization.billingSubscriptionId = typeof body.billingSubscriptionId === 'string' ? body.billingSubscriptionId : organization.billingSubscriptionId;
+    organization.updatedAt = nowIso();
+    this.audit.record(actor.id, 'billing.organization_updated', { organizationId, tier, status });
+    return organization;
+  }
+
+  private monitoringSignals() {
+    const timestamp = nowIso();
+    const authFailures = this.store.auditEvents.filter((event) => event.action.includes('login') || event.action.includes('password_reset')).length;
+    const failedDeployments = this.failedDeployments().length;
+    const pendingDomains = this.platformDomainStatus().filter((domain) => !domain.verified).length;
+    const certificateFailures = this.platformDomainStatus().filter((domain) => domain.certificateStatus === 'failed').length;
+    const runnerDegraded = this.runnerHealth().filter((runner) => runner.status === 'degraded').length;
+    const storageFailures = [...this.store.uploadSessions.values()].filter((session) => session.scannerStatus === 'failed').length;
+    return [
+      { id: 'monitor_auth', component: 'auth', severity: authFailures > 50 ? 'warning' : 'ok', message: `${authFailures} recent auth audit events`, observedAt: timestamp, runbookUrl: 'docs/operations.md#auth-monitoring' },
+      { id: 'monitor_deployments', component: 'deployments', severity: failedDeployments > 0 ? 'warning' : 'ok', message: `${failedDeployments} failed deployments`, observedAt: timestamp, runbookUrl: 'docs/operations.md#deployment-monitoring' },
+      { id: 'monitor_dns', component: 'dns', severity: pendingDomains > 0 ? 'warning' : 'ok', message: `${pendingDomains} domains pending verification`, observedAt: timestamp, runbookUrl: 'docs/operations.md#dns-monitoring' },
+      { id: 'monitor_certificates', component: 'certificates', severity: certificateFailures > 0 ? 'critical' : 'ok', message: `${certificateFailures} certificate failures`, observedAt: timestamp, runbookUrl: 'docs/operations.md#certificate-monitoring' },
+      { id: 'monitor_runners', component: 'runners', severity: runnerDegraded > 0 ? 'critical' : 'ok', message: `${runnerDegraded} degraded runners`, observedAt: timestamp, runbookUrl: 'docs/operations.md#runner-monitoring' },
+      { id: 'monitor_storage', component: 'storage', severity: storageFailures > 0 ? 'critical' : 'ok', message: `${storageFailures} failed upload scanner sessions`, observedAt: timestamp, runbookUrl: 'docs/operations.md#storage-monitoring' },
+    ];
+  }
+
   private authenticateOptional(request: ApiRequest): AuthActor | undefined {
     const authorization = request.headers?.authorization ?? request.headers?.Authorization;
     if (!authorization) {
@@ -1169,7 +1365,7 @@ export class BackendService {
       throw new Error('Registration requires email, name, and password.');
     }
 
-    return { email: record.email, name: record.name, password: record.password };
+    return { email: record.email, name: record.name, password: record.password, inviteCode: typeof record.inviteCode === 'string' ? record.inviteCode : undefined };
   }
 
   private loginInput(body: unknown): LoginInput {

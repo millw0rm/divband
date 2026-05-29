@@ -220,3 +220,18 @@ All `/admin/*` routes are admin-only and audit route access. Current audited sur
 - `GET/POST /admin/abuse-actions` for warning, suspension, unsuspension, and deployment restriction records.
 
 Abuse and suspension actions are also stored independently from project roles. A platform administrator can suspend a user, organization, or project without becoming a project owner/admin and without mutating project memberships.
+
+## Public signup production gate
+
+Public self-service signup remains **invite-only by default**. The backend reads `DIVBAND_SIGNUP_MODE`; any value other than `public` requires a valid `inviteCode` from `DIVBAND_SIGNUP_INVITE_CODES` after the first bootstrap administrator has registered. Do not set `DIVBAND_SIGNUP_MODE=public` until the controls below are enabled, tested, monitored, and included in the on-call runbook.
+
+Required controls now enforced by the backend:
+
+- **Email verification**: registration creates an expiring verification challenge, login and authenticated platform features require `emailVerifiedAt`, and test/local environments can expose a token with `DIVBAND_EXPOSE_AUTH_TOKENS=1` for automated smoke tests.
+- **Password reset**: reset requests create expiring, single-use challenges; confirmation rotates the password hash and revokes existing sessions.
+- **Rate limiting**: auth routes, publish mutations, and deployment triggers consume per-client buckets before route handling.
+- **Abuse controls**: static publishes are rejected for executable payloads, known phishing path patterns, and blocked binary content types; hosted app deployments are blocked for known abuse markers and platform-admin `restrict_deployments` actions.
+- **Tenant quotas and billing state**: organizations default to the free trial tier, project/domain/deployment quotas are enforced, and `past_due` or `cancelled` tenants cannot create or mutate hosted resources.
+- **Suspension boundaries**: user, organization, and project suspensions prevent authenticated actions or hosted resource mutations without changing project membership.
+
+Operational rule: if any of these controls regress, immediately set `DIVBAND_SIGNUP_MODE=invite_only` or remove public invite codes, then use the abuse and billing admin endpoints to freeze affected tenants.

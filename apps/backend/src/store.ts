@@ -4,11 +4,15 @@ import type {
   AiChangeRequest,
   AuditEvent,
   AuthSession,
+  EmailVerificationChallenge,
   GitLabIdentityLink,
+  MonitoringSignal,
   OAuthIdentity,
+  PasswordResetChallenge,
   Organization,
   OrganizationMembership,
   Project,
+  RateLimitBucket,
   ProjectEnvironmentSecret,
   PlatformAdmin,
   ProjectMembership,
@@ -24,6 +28,10 @@ export interface BackendStore {
   users: Map<string, User>;
   usersByEmail: Map<string, string>;
   passwordHashesByUserId: Map<string, string>;
+  emailVerificationChallenges: Map<string, EmailVerificationChallenge>;
+  passwordResetChallenges: Map<string, PasswordResetChallenge>;
+  rateLimitBuckets: Map<string, RateLimitBucket>;
+  monitoringSignals: Map<string, MonitoringSignal>;
   sessions: Map<string, AuthSession>;
   apiTokens: Map<string, ApiToken>;
   platformAdmins: Map<string, PlatformAdmin>;
@@ -48,6 +56,10 @@ export interface BackendStoreSnapshot {
   users: User[];
   usersByEmail: Array<[string, string]>;
   passwordHashesByUserId: Array<[string, string]>;
+  emailVerificationChallenges: EmailVerificationChallenge[];
+  passwordResetChallenges: PasswordResetChallenge[];
+  rateLimitBuckets: RateLimitBucket[];
+  monitoringSignals: MonitoringSignal[];
   sessions: AuthSession[];
   apiTokens: ApiToken[];
   platformAdmins: PlatformAdmin[];
@@ -78,6 +90,10 @@ export function createBackendStore(): BackendStore {
     users: new Map(),
     usersByEmail: new Map(),
     passwordHashesByUserId: new Map(),
+    emailVerificationChallenges: new Map(),
+    passwordResetChallenges: new Map(),
+    rateLimitBuckets: new Map(),
+    monitoringSignals: new Map(),
     sessions: new Map(),
     apiTokens: new Map(),
     platformAdmins: new Map(),
@@ -104,6 +120,10 @@ export function snapshotBackendStore(store: BackendStore): BackendStoreSnapshot 
     users: [...store.users.values()],
     usersByEmail: [...store.usersByEmail.entries()],
     passwordHashesByUserId: [...store.passwordHashesByUserId.entries()],
+    emailVerificationChallenges: [...store.emailVerificationChallenges.values()],
+    passwordResetChallenges: [...store.passwordResetChallenges.values()],
+    rateLimitBuckets: [...store.rateLimitBuckets.values()],
+    monitoringSignals: [...store.monitoringSignals.values()],
     sessions: [...store.sessions.values()],
     apiTokens: [...store.apiTokens.values()],
     platformAdmins: [...store.platformAdmins.values()],
@@ -129,6 +149,10 @@ export function hydrateBackendStore(snapshot: BackendStoreSnapshot, store: Backe
   store.users = mapById(snapshot.users);
   store.usersByEmail = new Map(snapshot.usersByEmail);
   store.passwordHashesByUserId = new Map(snapshot.passwordHashesByUserId);
+  store.emailVerificationChallenges = mapById(snapshot.emailVerificationChallenges ?? []);
+  store.passwordResetChallenges = mapById(snapshot.passwordResetChallenges ?? []);
+  store.rateLimitBuckets = new Map((snapshot.rateLimitBuckets ?? []).map((bucket) => [bucket.key, bucket]));
+  store.monitoringSignals = mapById(snapshot.monitoringSignals ?? []);
   store.sessions = new Map((snapshot.sessions ?? []).map((session) => [session.tokenHash, session]));
   store.apiTokens = mapById(snapshot.apiTokens);
   store.platformAdmins = mapById(snapshot.platformAdmins ?? []);
