@@ -2,51 +2,602 @@ openapi: 3.1.0
 info:
   title: divband Platform API
   version: 0.1.0
+  description: Initial backend API for user authentication and project lifecycle orchestration.
+servers:
+  - url: https://api.divband.local
+security:
+  - bearerAuth: []
 paths:
+  /auth/register:
+    post:
+      summary: Register a user and create a login session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+  /auth/login:
+    post:
+      summary: Log in a user and create a session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: User logged in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
   /projects:
     get:
       summary: List projects visible to the current user
       responses:
         '200':
           description: Project list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projects:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Project'
     post:
-      summary: Create a project and start provisioning
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
       responses:
         '202':
           description: Project accepted for provisioning
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project:
+                    $ref: '#/components/schemas/Project'
   /projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
     get:
-      summary: Get project status and metadata
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema:
-            type: string
+      summary: Get project metadata
       responses:
         '200':
           description: Project detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project:
+                    $ref: '#/components/schemas/Project'
+    delete:
+      summary: Archive a project
+      responses:
+        '200':
+          description: Project archived
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project:
+                    $ref: '#/components/schemas/Project'
+  /projects/{projectId}/status:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      summary: Get project lifecycle status
+      responses:
+        '200':
+          description: Project status summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectStatusSummary'
+  /projects/{projectId}/gitlab-repository:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      summary: Create the GitLab repository for a project
+      responses:
+        '200':
+          description: Repository created or reconciled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repository:
+                    $ref: '#/components/schemas/GitLabRepository'
+                  project:
+                    $ref: '#/components/schemas/Project'
+  /projects/{projectId}/kubernetes-namespace:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      summary: Provision the Kubernetes namespace for a project
+      responses:
+        '200':
+          description: Namespace provisioned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  namespace:
+                    $ref: '#/components/schemas/KubernetesNamespace'
+                  project:
+                    $ref: '#/components/schemas/Project'
+  /projects/{projectId}/platform-subdomain:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      summary: Attach the managed platform subdomain to a project
+      responses:
+        '200':
+          description: Platform hostname attached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hostname:
+                    type: string
+                  project:
+                    $ref: '#/components/schemas/Project'
   /projects/{projectId}/domains:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
     post:
       summary: Add a custom domain and return DNS verification instructions
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema:
-            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddDomainRequest'
       responses:
         '202':
           description: Domain verification pending
-  /projects/{projectId}/ai/change-requests:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domain:
+                    $ref: '#/components/schemas/ProjectDomain'
+  /projects/{projectId}/domains/{domainId}/verify:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: domainId
+        in: path
+        required: true
+        schema:
+          type: string
     post:
-      summary: Ask the AI assistant to draft a project change
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema:
-            type: string
+      summary: Verify DNS for a custom domain and request a certificate
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                observedToken:
+                  type: string
+      responses:
+        '200':
+          description: Domain verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domain:
+                    $ref: '#/components/schemas/ProjectDomain'
+  /projects/{projectId}/deployments:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      summary: Trigger a build and deployment
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriggerDeploymentRequest'
       responses:
         '202':
-          description: AI change request accepted
+          description: Deployment queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deployment:
+                    $ref: '#/components/schemas/Deployment'
+                  project:
+                    $ref: '#/components/schemas/Project'
+  /projects/{projectId}/deployments/{deploymentId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: deploymentId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: View deployment status
+      responses:
+        '200':
+          description: Deployment detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deployment:
+                    $ref: '#/components/schemas/Deployment'
+  /projects/{projectId}/logs:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      summary: View deployment logs for the project
+      responses:
+        '200':
+          description: Deployment logs grouped by deployment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deployments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        state:
+                          $ref: '#/components/schemas/DeploymentState'
+                        logs:
+                          type: array
+                          items:
+                            type: string
+  /projects/{projectId}/environment-variables:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      summary: List masked project environment variables
+      responses:
+        '200':
+          description: Environment variables
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  environmentVariables:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EnvironmentVariable'
+    put:
+      summary: Create or update project environment variables
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEnvironmentVariablesRequest'
+      responses:
+        '200':
+          description: Environment variables updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  environmentVariables:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EnvironmentVariable'
+  /projects/{projectId}/environment-variables/{key}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Delete a project environment variable
+      responses:
+        '200':
+          description: Environment variable deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  environmentVariables:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EnvironmentVariable'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, name, password]
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        password:
+          type: string
+          minLength: 8
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    AuthResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        session:
+          $ref: '#/components/schemas/AuthSession'
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    AuthSession:
+      type: object
+      properties:
+        token:
+          type: string
+        userId:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    CreateProjectRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+    ProjectStatus:
+      type: string
+      enum:
+        - draft
+        - repository_provisioned
+        - namespace_provisioned
+        - building
+        - deployed
+        - domain_pending_verification
+        - domain_active
+        - failed
+        - archived
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+        ownerId:
+          type: string
+        slug:
+          type: string
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        gitlabPath:
+          type: string
+        namespace:
+          type: string
+        platformHostname:
+          type: string
+        runnerTag:
+          type: string
+        repositoryUrl:
+          type: string
+        namespaceProvisioned:
+          type: boolean
+        platformSubdomainAttached:
+          type: boolean
+        domains:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectDomain'
+        deployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Deployment'
+        environmentVariables:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentVariable'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: string
+          format: date-time
+    ProjectStatusSummary:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        repositoryUrl:
+          type: string
+        namespaceProvisioned:
+          type: boolean
+        platformSubdomainAttached:
+          type: boolean
+        activeDomains:
+          type: array
+          items:
+            type: string
+        latestDeployment:
+          $ref: '#/components/schemas/Deployment'
+    GitLabRepository:
+      type: object
+      properties:
+        path:
+          type: string
+        webUrl:
+          type: string
+        cloneUrl:
+          type: string
+    KubernetesNamespace:
+      type: object
+      properties:
+        name:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+    AddDomainRequest:
+      type: object
+      required: [hostname]
+      properties:
+        hostname:
+          type: string
+    CertificateState:
+      type: string
+      enum: [not_requested, pending, issued, failed]
+    ProjectDomain:
+      type: object
+      properties:
+        id:
+          type: string
+        hostname:
+          type: string
+        verificationToken:
+          type: string
+        verificationRecord:
+          type: string
+        verified:
+          type: boolean
+        certificateStatus:
+          $ref: '#/components/schemas/CertificateState'
+        createdAt:
+          type: string
+          format: date-time
+        verifiedAt:
+          type: string
+          format: date-time
+    TriggerDeploymentRequest:
+      type: object
+      properties:
+        gitRef:
+          type: string
+          default: main
+        commitSha:
+          type: string
+    DeploymentState:
+      type: string
+      enum: [queued, running, succeeded, failed, cancelled]
+    Deployment:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        state:
+          $ref: '#/components/schemas/DeploymentState'
+        gitRef:
+          type: string
+        commitSha:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        logs:
+          type: array
+          items:
+            type: string
+    UpdateEnvironmentVariablesRequest:
+      type: object
+      required: [variables]
+      properties:
+        variables:
+          type: array
+          items:
+            type: object
+            required: [key, value]
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+              protected:
+                type: boolean
+    EnvironmentVariable:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+          description: Masked in read responses.
+        protected:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time

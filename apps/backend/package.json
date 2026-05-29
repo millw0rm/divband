@@ -4,5 +4,9 @@
   "private": true,
   "description": "Platform API for project lifecycle orchestration.",
   "type": "module",
-  "main": "src/project-lifecycle.ts"
+  "main": "src/index.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": "./src/index.ts"
+  }
 }
