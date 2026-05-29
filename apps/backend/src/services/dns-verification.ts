@@ -15,7 +15,7 @@ export class DnsVerificationService {
     const token = createId('dns');
     return {
       token,
-      recordName: `_divband-challenge.${hostname}`,
+      recordName: `_divband.${hostname}`,
       recordType: 'TXT',
       recordValue: `divband-verification=${token}`,
     };
@@ -27,7 +27,10 @@ export class DnsVerificationService {
       return true;
     }
 
-    const records = await this.lookupTxtRecords(`_divband-challenge.${hostname}`);
+    const records = [
+      ...await this.lookupTxtRecords(`_divband.${hostname}`),
+      ...await this.lookupTxtRecords(`_divband-challenge.${hostname}`),
+    ];
     return records.some((record) => record === expectedValue || record === expectedToken);
   }
 

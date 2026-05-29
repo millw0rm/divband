@@ -2,6 +2,8 @@ export type KubernetesConfigMode = 'disabled' | 'in_cluster' | 'kubeconfig';
 
 export type ObjectStorageProvider = 'auto' | 'memory' | 's3';
 
+export type ManagedDnsProviderName = 'disabled' | 'http';
+
 export interface ObjectStorageConfig {
   provider: ObjectStorageProvider;
   endpoint?: string;
@@ -14,6 +16,15 @@ export interface ObjectStorageConfig {
   livePrefix: string;
 }
 
+export interface ManagedDnsConfig {
+  provider: ManagedDnsProviderName;
+  endpoint?: string;
+  token?: string;
+  defaultTtlSeconds: number;
+  platformIngressTarget?: string;
+  apexRecordType: 'ALIAS' | 'ANAME' | 'A' | 'AAAA';
+}
+
 export interface BackendRuntimeConfig {
   port: number;
   apiBaseUrl: string;
@@ -23,6 +34,7 @@ export interface BackendRuntimeConfig {
   gitLabUrl: string;
   kubernetesConfigMode: KubernetesConfigMode;
   objectStorage: ObjectStorageConfig;
+  managedDns: ManagedDnsConfig;
 }
 
 export function loadBackendConfig(env: Record<string, string | undefined> = process.env): BackendRuntimeConfig {
@@ -48,6 +60,14 @@ export function loadBackendConfig(env: Record<string, string | undefined> = proc
       stagingPrefix: env.OBJECT_STORAGE_STAGING_PREFIX?.trim() || 'staging',
       livePrefix: env.OBJECT_STORAGE_LIVE_PREFIX?.trim() || 'sites',
     },
+    managedDns: {
+      provider: managedDnsProvider(env.DNS_PROVIDER),
+      endpoint: emptyToUndefined(env.DNS_PROVIDER_ENDPOINT),
+      token: emptyToUndefined(env.DNS_PROVIDER_TOKEN),
+      defaultTtlSeconds: integer(env.DNS_PROVIDER_DEFAULT_TTL_SECONDS, 300),
+      platformIngressTarget: emptyToUndefined(env.DNS_PROVIDER_PLATFORM_INGRESS_TARGET),
+      apexRecordType: managedDnsApexRecordType(env.DNS_PROVIDER_APEX_RECORD_TYPE),
+    },
   };
 }
 
@@ -72,6 +92,20 @@ function boolean(value: string | undefined, fallback: boolean): boolean {
     return fallback;
   }
   return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
+}
+
+function managedDnsProvider(value: string | undefined): ManagedDnsProviderName {
+  if (value === 'http' || value === 'disabled') {
+    return value;
+  }
+  return 'disabled';
+}
+
+function managedDnsApexRecordType(value: string | undefined): ManagedDnsConfig['apexRecordType'] {
+  if (value === 'ALIAS' || value === 'ANAME' || value === 'A' || value === 'AAAA') {
+    return value;
+  }
+  return 'ALIAS';
 }
 
 function objectStorageProvider(value: string | undefined): ObjectStorageProvider {

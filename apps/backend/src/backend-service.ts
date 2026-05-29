@@ -39,6 +39,7 @@ import { AuditLogService } from './services/audit-log.ts';
 import { CertificateStatusService } from './services/certificate-status.ts';
 import { DeploymentStatusService, type DeploymentStatusReport } from './services/deployment-status.ts';
 import { DnsVerificationService } from './services/dns-verification.ts';
+import { ManagedDnsService, type ManagedDnsProvider } from './services/managed-dns.ts';
 import { GitLabService } from './services/gitlab.ts';
 import { KubernetesService } from './services/kubernetes.ts';
 import { RateLimitService } from './services/rate-limit.ts';
@@ -62,24 +63,37 @@ interface AuthorizedProject {
   membership: ProjectMembership;
 }
 
+export interface BackendServiceOptions extends PublishingServiceOptions {
+  managedDnsProvider?: ManagedDnsProvider;
+  managedDnsDefaultTtlSeconds?: number;
+  managedDnsPlatformIngressTarget?: string;
+  managedDnsApexRecordType?: 'ALIAS' | 'ANAME' | 'A' | 'AAAA';
+}
+
 export class BackendService {
   private readonly auth: AuthService;
   private readonly audit: AuditLogService;
   private readonly certificates = new CertificateStatusService();
   private readonly deployments = new DeploymentStatusService();
   private readonly dns = new DnsVerificationService();
+  private readonly managedDns: ManagedDnsService;
   private readonly gitlab = new GitLabService();
   private readonly kubernetes = new KubernetesService();
   private readonly publishing: PublishingService;
   private readonly secrets: ProjectSecretService;
   private readonly rateLimits: RateLimitService;
 
-  constructor(private readonly store: BackendStore = defaultStore, publishingOptions: PublishingServiceOptions = {}) {
+  constructor(private readonly store: BackendStore = defaultStore, options: BackendServiceOptions = {}) {
     this.auth = new AuthService(store);
     this.audit = new AuditLogService(store);
     this.rateLimits = new RateLimitService(store);
     this.secrets = new ProjectSecretService(store);
-    this.publishing = new PublishingService(store, publishingOptions);
+    this.publishing = new PublishingService(store, options);
+    this.managedDns = new ManagedDnsService(options.managedDnsProvider, {
+      defaultTtlSeconds: options.managedDnsDefaultTtlSeconds,
+      platformIngressTarget: options.managedDnsPlatformIngressTarget,
+      apexRecordType: options.managedDnsApexRecordType,
+    });
   }
 
   async handle(request: ApiRequest): Promise<ApiResponse> {
@@ -296,7 +310,7 @@ export class BackendService {
 
         if (method === 'POST' && this.matches(route, 'projects', projectId, 'domains')) {
           const { project } = this.requireProject(projectId, actor, 'domain:manage');
-          return this.created({ domain: this.addCustomDomain(project, user, this.requiredObject(request.body)) }, 202);
+          return this.created({ domain: await this.addCustomDomain(project, user, this.requiredObject(request.body)) }, 202);
         }
 
         if (method === 'POST' && route.segments[2] === 'domains' && route.segments[3] && route.segments[4] === 'verify') {
@@ -704,7 +718,7 @@ export class BackendService {
     return project.platformHostname;
   }
 
-  private addCustomDomain(project: Project, user: User, body: Record<string, unknown>): ProjectDomain {
+  private async addCustomDomain(project: Project, user: User, body: Record<string, unknown>): Promise<ProjectDomain> {
     this.requireDomainQuota(project);
     const hostname = typeof body.hostname === 'string' ? body.hostname.trim().toLowerCase() : '';
     if (!hostname || !hostname.includes('.')) {
@@ -738,6 +752,12 @@ export class BackendService {
       updatedAt: timestamp,
     };
 
+    await this.managedDns.ensureDelegatedZone(project, domain);
+    if (domain.providerZoneId) {
+      await this.managedDns.createVerificationRecord(domain);
+      domain.dnsInstructions = this.domainDnsInstructions(hostname, dnsMode, challenge.recordName, challenge.recordValue, dnsTarget, domain.assignedNameservers);
+    }
+
     project.domains.push(domain);
     this.touch(project, 'domain_pending_verification');
     this.audit.record(user.id, 'project.custom_domain_added', { hostname, dnsMode }, project.id);
@@ -768,6 +788,10 @@ export class BackendService {
       failureReason: undefined,
     });
     Object.assign(domain, updatedDomain);
+    if (domain.providerZoneId) {
+      await this.managedDns.createApplicationRecord(project, domain);
+      await this.managedDns.createWildcardRecord(project, domain);
+    }
     this.touch(project, 'domain_active');
     this.audit.record(user.id, 'project.custom_domain_verified', { hostname: domain.hostname, dnsMode: domain.dnsMode }, project.id);
     return domain;
@@ -789,7 +813,7 @@ export class BackendService {
     if (!this.isDelegatedDnsMode(dnsMode)) {
       return [];
     }
-    return ['ns1.managed-dns.divband.ir', 'ns2.managed-dns.divband.ir', 'ns3.managed-dns.divband.ir'];
+    return [];
   }
 
   private initialDelegationStatus(dnsMode: DomainDnsMode): DomainDelegationStatus {
