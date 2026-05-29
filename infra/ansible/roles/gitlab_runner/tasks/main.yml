@@ -1,0 +1,52 @@
+---
+- name: Read runner authentication tokens from GitLab Terraform outputs
+  ansible.builtin.command:
+    cmd: terraform output -json runner_authentication_tokens
+    chdir: "{{ gitlab_runner_terraform_dir }}"
+  delegate_to: localhost
+  become: false
+  register: gitlab_runner_terraform_tokens
+  changed_when: false
+  no_log: true
+  when:
+    - gitlab_runner_project_key | length > 0
+    - gitlab_runner_token == 'REPLACE_WITH_RUNNER_AUTHENTICATION_TOKEN'
+
+- name: Select this runner authentication token
+  ansible.builtin.set_fact:
+    gitlab_runner_token: "{{ (gitlab_runner_terraform_tokens.stdout | from_json)[gitlab_runner_project_key] }}"
+  no_log: true
+  when:
+    - gitlab_runner_project_key | length > 0
+    - gitlab_runner_terraform_tokens is defined
+    - gitlab_runner_terraform_tokens.stdout is defined
+
+- name: Install GitLab Runner
+  ansible.builtin.package:
+    name: "{{ gitlab_runner_package_name }}"
+    state: present
+
+- name: Ensure GitLab Runner is enabled
+  ansible.builtin.service:
+    name: gitlab-runner
+    enabled: true
+    state: started
+
+- name: Register GitLab Runner with token from GitLab provisioning
+  ansible.builtin.command: >-
+    gitlab-runner register
+    --non-interactive
+    --url {{ gitlab_url }}
+    --token {{ gitlab_runner_token }}
+    --executor {{ gitlab_runner_executor }}
+    --description {{ gitlab_runner_description }}
+    --tag-list {{ gitlab_runner_tags | join(',') }}
+    --locked={{ gitlab_runner_locked | lower }}
+    --run-untagged={{ gitlab_runner_run_untagged | lower }}
+    {% if gitlab_runner_executor == 'kubernetes' %}
+    --kubernetes-namespace {{ gitlab_runner_kubernetes_namespace }}
+    --kubernetes-image {{ gitlab_runner_kubernetes_image }}
+    {% endif %}
+  args:
+    creates: /etc/gitlab-runner/config.toml
+  no_log: true

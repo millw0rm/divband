@@ -1,0 +1,40 @@
+---
+- name: Show connected GitLab endpoint
+  ansible.builtin.debug:
+    msg: "Using GitLab endpoint {{ gitlab_url }}; Terraform integration path is {{ gitlab_terraform_dir }}"
+  when: gitlab_mode == 'connect'
+
+- name: Install GitLab package when hosting GitLab on this VM
+  ansible.builtin.package:
+    name: "{{ gitlab_package_name }}"
+    state: present
+  when: gitlab_mode == 'install'
+
+- name: Configure GitLab external URL
+  ansible.builtin.lineinfile:
+    path: /etc/gitlab/gitlab.rb
+    regexp: '^external_url '
+    line: "external_url '{{ gitlab_external_url }}'"
+    create: false
+  notify: Reconfigure GitLab
+  when: gitlab_mode == 'install'
+
+- name: Plan GitLab Terraform stack for tenant/project provisioning
+  ansible.builtin.command:
+    cmd: terraform plan -out={{ gitlab_terraform_plan_file }}
+    chdir: "{{ gitlab_terraform_dir }}"
+  delegate_to: localhost
+  become: false
+  register: gitlab_terraform_plan
+  changed_when: false
+  when: gitlab_run_terraform
+
+- name: Apply GitLab Terraform stack
+  ansible.builtin.command:
+    cmd: terraform apply -auto-approve {{ gitlab_terraform_plan_file }}
+    chdir: "{{ gitlab_terraform_dir }}"
+  delegate_to: localhost
+  become: false
+  register: gitlab_terraform_apply
+  changed_when: "'Apply complete' in gitlab_terraform_apply.stdout"
+  when: gitlab_run_terraform

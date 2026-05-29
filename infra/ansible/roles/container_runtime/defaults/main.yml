@@ -1,0 +1,7 @@
+---
+container_runtime_engine: containerd
+containerd_config_path: /etc/containerd/config.toml
+docker_packages:
+  - docker.io
+containerd_packages:
+  - containerd

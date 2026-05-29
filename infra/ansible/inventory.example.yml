@@ -1,0 +1,72 @@
+---
+all:
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: ~/.ssh/divband-platform.pem
+    ansible_python_interpreter: /usr/bin/python3
+
+    divband_domain: divband.ir
+    divband_environment: production
+    divband_timezone: UTC
+    divband_admin_users:
+      - name: divband
+        groups: [sudo]
+        ssh_keys:
+          - "ssh-ed25519 REPLACE_WITH_OPERATOR_PUBLIC_KEY divband-operator"
+
+    container_runtime_engine: containerd
+    kubernetes_distribution: k3s
+    kubernetes_api_endpoint: "https://REPLACE_WITH_CONTROL_PLANE_IP:6443"
+    kubernetes_pod_cidr: 10.42.0.0/16
+    kubernetes_service_cidr: 10.43.0.0/16
+    kubernetes_template_dir: "{{ playbook_dir }}/../../k8s/base"
+
+    ingress_class_name: nginx
+    cert_manager_cluster_issuer: letsencrypt-prod
+    cert_manager_acme_email: ops@divband.ir
+    cert_manager_acme_server: https://acme-v02.api.letsencrypt.org/directory
+
+    external_secrets_store_name: divband-tenant-secrets
+    external_secrets_provider: vault
+    external_secrets_vault_server: https://vault.divband.ir
+    external_secrets_vault_path: secret
+
+    gitlab_url: https://git.divband.ir
+    gitlab_terraform_dir: "{{ playbook_dir }}/../../gitlab/terraform"
+    gitlab_runner_executor: kubernetes
+    gitlab_runner_tags:
+      - divband
+      - kubernetes
+
+    divband_namespace: divband-system
+    divband_backend_image: registry.gitlab.com/divband/control-plane/backend:latest
+    divband_frontend_image: registry.gitlab.com/divband/control-plane/frontend:latest
+    divband_public_hostname: app.divband.ir
+
+  children:
+    control_plane:
+      hosts:
+        cp-1:
+          ansible_host: 192.0.2.10
+    workers:
+      hosts:
+        worker-1:
+          ansible_host: 192.0.2.20
+        worker-2:
+          ansible_host: 192.0.2.21
+    gitlab:
+      hosts:
+        gitlab-1:
+          ansible_host: 192.0.2.30
+    runners:
+      hosts:
+        runner-1:
+          ansible_host: 192.0.2.40
+    load_balancers:
+      hosts:
+        lb-1:
+          ansible_host: 192.0.2.50
+    monitoring:
+      hosts:
+        monitoring-1:
+          ansible_host: 192.0.2.60

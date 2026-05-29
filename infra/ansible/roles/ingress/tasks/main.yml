@@ -1,0 +1,13 @@
+---
+- name: Fail when an unsupported ingress controller is selected
+  ansible.builtin.fail:
+    msg: "This scaffold currently installs ingress-nginx. Set ingress_controller: nginx or extend the role for Gateway API."
+  when: ingress_controller != 'nginx'
+
+- name: Install nginx ingress controller
+  ansible.builtin.command:
+    cmd: "kubectl apply -f {{ ingress_nginx_manifest_url }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: ingress_nginx_apply
+  changed_when: "'configured' in ingress_nginx_apply.stdout or 'created' in ingress_nginx_apply.stdout"
