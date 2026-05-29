@@ -209,6 +209,48 @@ export interface PublishResponse {
   expiresAt?: string;
 }
 
+export type PublishedVersionState = 'pending' | 'live' | 'failed' | 'deleted';
+
+export interface PublishedSite {
+  id: string;
+  slug: string;
+  ownerId?: string;
+  currentVersionId?: string;
+  platformHostname: string;
+  expiresAt?: string;
+  claimTokenHash?: string;
+  spaMode: boolean;
+  viewer: string;
+  passwordHash?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublishedVersion {
+  id: string;
+  siteId: string;
+  state: PublishedVersionState;
+  createdAt: string;
+  finalizedAt?: string;
+}
+
+export interface PublishedFile {
+  siteId: string;
+  versionId: string;
+  path: string;
+  size: number;
+  contentType: string;
+  hash: string;
+  storageKey: string;
+}
+
+export interface UploadSession {
+  versionId: string;
+  expiresAt: string;
+  uploads: PublishUploadPlan[];
+  skipped: PublishFileManifest[];
+}
+
 
 export type AiChangeStatus =
   | 'requested'
