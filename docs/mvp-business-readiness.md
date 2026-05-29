@@ -115,3 +115,21 @@ Complete these before positioning Divband as a public MVP business:
 2. **Operator pilot:** deploy one internal project using real GitLab and Kubernetes paths.
 3. **Private alpha:** invite a small number of supervised users; keep manual approval for domains and deployments.
 4. **Public MVP:** launch only after release checklist, monitoring, backup, auth, billing/limits, and security requirements are complete.
+
+## Public self-service signup controls
+
+Public signup must stay disabled or invite-only until the following production controls pass in the target environment:
+
+| Control | Implementation gate |
+| --- | --- |
+| Email verification | `/auth/register` issues an expiring verification challenge and `/auth/verify-email` must set `emailVerifiedAt` before login or platform feature use. |
+| Password reset | `/auth/password-reset/request` and `/auth/password-reset/confirm` create expiring one-time challenges, rotate the password hash, and revoke existing sessions. |
+| Rate limiting | Auth, publish mutation, and deployment trigger routes consume per-client buckets before work starts. |
+| Abuse detection | Static publishes reject executable/phishing/binary-abuse patterns, hosted deployments reject known abuse markers, and platform admins can restrict deployments for a project. |
+| Tenant quotas and plan enforcement | Organizations carry billing tier/status; free/pro/team limits are enforced for projects, custom domains, deployments, and published sites. |
+| Billing state | Past-due and cancelled tenants cannot create or mutate hosted resources until billing is updated by a platform administrator. |
+| Backup/restore | `npm run smoke:restore --workspace @divband/backend` must pass after restoring a production-like snapshot. |
+| Monitoring/alerting | `/admin/monitoring/signals` and the operations runbook cover auth, deployments, DNS, certificates, runners, and storage. |
+| End-to-end smoke | `npm run smoke:controls --workspace @divband/backend` must pass for signup through project live-hostname access and password reset. |
+
+Default posture: `DIVBAND_SIGNUP_MODE` is invite-only unless explicitly set to `public`. Keep it invite-only for pilots and set `DIVBAND_SIGNUP_INVITE_CODES` for controlled onboarding.

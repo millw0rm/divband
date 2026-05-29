@@ -33,7 +33,9 @@ export class PublishingService {
 
   async create(input: PublishRequest, actor?: AuthActor): Promise<PublishResponse> {
     const files = this.filesFromInput(input.files);
-    this.requireWithinLimits(files);
+    this.requireVerifiedActor(actor);
+    this.detectStaticAbuse(files);
+    this.requireWithinLimits(files, actor);
     const timestamp = nowIso();
     const slug = this.reserveSlug(input.slug, this.slugFromFiles(files));
     const anonymous = !actor || input.anonymous === true;
@@ -65,7 +67,9 @@ export class PublishingService {
     await this.requireWriteAccess(publish, actor, input.claimToken);
     this.requireNotExpired(publish);
     const files = this.filesFromInput(input.files);
-    this.requireWithinLimits(files);
+    this.requireVerifiedActor(actor);
+    this.detectStaticAbuse(files);
+    this.requireWithinLimits(files, actor);
     const previousFiles = this.liveOrLatestVersion(publish)?.files ?? [];
     const skipped = files.filter((file) => previousFiles.some((previous) => previous.path === file.path && previous.hash === file.hash));
     const uploads = files.filter((file) => !skipped.some((skippedFile) => skippedFile.path === file.path));
@@ -374,19 +378,57 @@ export class PublishingService {
     return files.map((file) => this.fileFromInput(file));
   }
 
-  private requireWithinLimits(files: PublishFileManifest[]): void {
-    if (files.length > PUBLISHING_LIMITS.anonymous.maxFiles) {
-      throw new Error(`Publish includes too many files. Maximum is ${PUBLISHING_LIMITS.anonymous.maxFiles}.`);
+  private requireWithinLimits(files: PublishFileManifest[], actor?: AuthActor): void {
+    const tier = actor?.user.billingTier === 'team' ? PUBLISHING_LIMITS.paid.team : actor?.user.billingTier === 'pro' ? PUBLISHING_LIMITS.paid.pro : actor ? PUBLISHING_LIMITS.free : PUBLISHING_LIMITS.anonymous;
+    if (actor && (actor.user.billingStatus === 'past_due' || actor.user.billingStatus === 'cancelled')) {
+      throw new Error('Billing must be active before publishing.');
+    }
+    if (actor) {
+      const ownedSites = [...this.store.publishes.values()].filter((publish) => publish.ownerUserId === actor.user.id).length;
+      const maxSites = 'maxSites' in tier ? tier.maxSites : 1;
+      if (ownedSites >= maxSites) {
+        throw new Error('Published-site quota exceeded for current plan.');
+      }
+    }
+    if (files.length > tier.maxFiles) {
+      throw new Error(`Publish includes too many files. Maximum is ${tier.maxFiles}.`);
     }
 
     const largestFile = Math.max(...files.map((file) => file.size));
-    if (largestFile > PUBLISHING_LIMITS.anonymous.maxFileBytes) {
-      throw new Error(`Publish includes a file larger than ${PUBLISHING_LIMITS.anonymous.maxFileBytes} bytes.`);
+    if (largestFile > tier.maxFileBytes) {
+      throw new Error(`Publish includes a file larger than ${tier.maxFileBytes} bytes.`);
     }
 
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-    if (totalBytes > PUBLISHING_LIMITS.anonymous.maxTotalBytes) {
-      throw new Error(`Publish is larger than ${PUBLISHING_LIMITS.anonymous.maxTotalBytes} bytes.`);
+    if (totalBytes > tier.maxTotalBytes) {
+      throw new Error(`Publish is larger than ${tier.maxTotalBytes} bytes.`);
+    }
+  }
+
+  private requireVerifiedActor(actor?: AuthActor): void {
+    if (actor && !actor.user.emailVerifiedAt) {
+      throw new Error('Email verification is required before publishing.');
+    }
+  }
+
+  private detectStaticAbuse(files: PublishFileManifest[]): void {
+    const findings = files.flatMap((file) => {
+      const path = file.path.toLowerCase();
+      const contentType = file.contentType.toLowerCase();
+      const suspicious = [];
+      if (/\.(exe|scr|bat|cmd|ps1|apk|dmg|pkg|jar)$/u.test(path)) {
+        suspicious.push(`blocked executable payload: ${file.path}`);
+      }
+      if (path.includes('login') && (path.includes('paypal') || path.includes('bank') || path.includes('wallet'))) {
+        suspicious.push(`possible phishing path: ${file.path}`);
+      }
+      if (contentType.includes('application/x-msdownload') || contentType.includes('application/vnd.android.package-archive')) {
+        suspicious.push(`blocked content type: ${file.contentType}`);
+      }
+      return suspicious;
+    });
+    if (findings.length > 0) {
+      throw new Error(`Static publish blocked by abuse detection: ${findings.join('; ')}`);
     }
   }
 

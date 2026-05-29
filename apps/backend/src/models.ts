@@ -11,9 +11,36 @@ export interface User {
   email: string;
   name: string;
   createdAt: string;
+  emailVerifiedAt?: string;
+  signupInviteCode?: string;
+  billingTier?: TenantPlanTier;
+  billingStatus?: BillingStatus;
   suspendedAt?: string;
   suspensionReason?: string;
 }
+
+export interface TenantPlan {
+  tier: TenantPlanTier;
+  billingStatus: BillingStatus;
+  maxProjects: number;
+  maxCustomDomains: number;
+  maxMonthlyDeployments: number;
+  maxPublishedSites: number;
+  maxPublishBytes: number;
+}
+
+export interface MonitoringSignal {
+  id: string;
+  component: 'auth' | 'deployments' | 'dns' | 'certificates' | 'runners' | 'storage';
+  severity: 'ok' | 'warning' | 'critical';
+  message: string;
+  observedAt: string;
+  runbookUrl?: string;
+}
+
+
+export type TenantPlanTier = 'free' | 'pro' | 'team';
+export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'cancelled';
 
 export interface Organization {
   id: string;
@@ -21,6 +48,10 @@ export interface Organization {
   slug: string;
   createdAt: string;
   updatedAt: string;
+  billingTier?: TenantPlanTier;
+  billingStatus?: BillingStatus;
+  billingCustomerId?: string;
+  billingSubscriptionId?: string;
   suspendedAt?: string;
   suspensionReason?: string;
 }
@@ -40,6 +71,33 @@ export interface ProjectMembership {
   role: ProjectRole;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface EmailVerificationChallenge {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  email: string;
+  createdAt: string;
+  expiresAt: string;
+  verifiedAt?: string;
+}
+
+export interface PasswordResetChallenge {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt?: string;
+}
+
+export interface RateLimitBucket {
+  id: string;
+  key: string;
+  windowStart: string;
+  count: number;
+  blockedUntil?: string;
 }
 
 export interface AuthSession {
@@ -188,6 +246,8 @@ export interface Project {
   archivedAt?: string;
   suspendedAt?: string;
   suspensionReason?: string;
+  deploymentRestrictedAt?: string;
+  deploymentRestrictionReason?: string;
 }
 
 export interface PublishFileManifest {
@@ -298,6 +358,7 @@ export interface UploadSession {
   uploads: PublishUploadPlan[];
   skipped: PublishFileManifest[];
   scannerStatus: 'pending' | 'clean' | 'failed';
+  scannerFindings?: string[];
   createdAt: string;
 }
 

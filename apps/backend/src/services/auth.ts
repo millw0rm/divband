@@ -1,11 +1,13 @@
 import { roleAtLeast } from '@divband/auth';
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import process from 'node:process';
-import type { ApiToken, AuthActor, AuthSession, GitLabIdentityLink, OAuthIdentity, ProjectMembership, User } from '../models.ts';
+import type { ApiToken, AuthActor, AuthSession, EmailVerificationChallenge, GitLabIdentityLink, OAuthIdentity, PasswordResetChallenge, ProjectMembership, User } from '../models.ts';
 import type { BackendStore } from '../store.ts';
 import { createId, nowIso } from '../utils.ts';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
+const EMAIL_VERIFICATION_TTL_MS = 1000 * 60 * 60 * 24;
+const PASSWORD_RESET_TTL_MS = 1000 * 60 * 60;
 const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
@@ -15,6 +17,7 @@ export interface RegisterInput {
   email: string;
   name: string;
   password: string;
+  inviteCode?: string;
 }
 
 export interface LoginInput {
@@ -27,6 +30,7 @@ export interface AuthResult {
   session: AuthSession;
   token: string;
   tokenType: 'Bearer';
+  emailVerificationToken?: string;
 }
 
 export interface CreateApiTokenInput {
@@ -51,9 +55,15 @@ export interface LinkGitLabIdentityInput {
 
 export class AuthService {
   private readonly tokenPepper: string;
+  private readonly signupMode: 'invite_only' | 'public';
+  private readonly inviteCodes: Set<string>;
+  private readonly exposeRecoveryTokens: boolean;
 
   constructor(private readonly store: BackendStore, env: Record<string, string | undefined> = process.env) {
     this.tokenPepper = env.DIVBAND_TOKEN_HASH_PEPPER?.trim() || 'divband-local-development-token-pepper';
+    this.signupMode = env.DIVBAND_SIGNUP_MODE === 'public' ? 'public' : 'invite_only';
+    this.inviteCodes = new Set((env.DIVBAND_SIGNUP_INVITE_CODES ?? '').split(',').map((code) => code.trim()).filter(Boolean));
+    this.exposeRecoveryTokens = env.DIVBAND_EXPOSE_AUTH_TOKENS === '1' || env.NODE_ENV !== 'production';
   }
 
   register(input: RegisterInput): AuthResult {
@@ -67,19 +77,24 @@ export class AuthService {
     if (this.store.usersByEmail.has(email)) {
       throw new Error('A user with this email already exists.');
     }
+    this.requireSignupAllowed(input.inviteCode);
 
     const user: User = {
       id: createId('user'),
       email,
       name: input.name.trim() || email,
       createdAt: nowIso(),
+      signupInviteCode: input.inviteCode?.trim(),
+      billingTier: 'free',
+      billingStatus: 'trialing',
     };
 
     this.store.users.set(user.id, user);
     this.store.usersByEmail.set(email, user.id);
     this.store.passwordHashesByUserId.set(user.id, this.hashPassword(input.password));
+    const verification = this.createEmailVerificationChallenge(user);
 
-    return { user, ...this.createSession(user.id), tokenType: 'Bearer' };
+    return { user, ...this.createSession(user.id), tokenType: 'Bearer', emailVerificationToken: this.exposeRecoveryTokens ? verification.token : undefined };
   }
 
   login(input: LoginInput): AuthResult {
@@ -99,11 +114,73 @@ export class AuthService {
       throw new Error('Invalid email or password.');
     }
 
+    if (!user.emailVerifiedAt) {
+      throw new Error('Email verification is required before login.');
+    }
+
     if (this.needsPasswordRehash(expectedHash)) {
       this.store.passwordHashesByUserId.set(user.id, this.hashPassword(input.password));
     }
 
     return { user, ...this.createSession(user.id), tokenType: 'Bearer' };
+  }
+
+
+  verifyEmail(token: string): User {
+    const tokenHash = this.hashToken(token.trim());
+    const challenge = [...this.store.emailVerificationChallenges.values()].find((item) => item.tokenHash === tokenHash && !item.verifiedAt);
+    if (!challenge || Date.parse(challenge.expiresAt) <= Date.now()) {
+      throw new Error('Email verification token is invalid or expired.');
+    }
+    const user = this.store.users.get(challenge.userId);
+    if (!user) {
+      throw new Error('Email verification token is invalid or expired.');
+    }
+    const timestamp = nowIso();
+    challenge.verifiedAt = timestamp;
+    user.emailVerifiedAt = timestamp;
+    return user;
+  }
+
+  requestPasswordReset(emailInput: string): { challenge?: PasswordResetChallenge; token?: string } {
+    const email = emailInput.trim().toLowerCase();
+    const userId = this.store.usersByEmail.get(email);
+    if (!userId) {
+      return {};
+    }
+    const token = this.createOpaqueToken('reset');
+    const challenge: PasswordResetChallenge = {
+      id: createId('password_reset'),
+      userId,
+      tokenHash: this.hashToken(token),
+      createdAt: nowIso(),
+      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString(),
+    };
+    this.store.passwordResetChallenges.set(challenge.id, challenge);
+    return { challenge, token: this.exposeRecoveryTokens ? token : undefined };
+  }
+
+  resetPassword(token: string, password: string): User {
+    if (password.length < 8) {
+      throw new Error('Password must be at least 8 characters.');
+    }
+    const tokenHash = this.hashToken(token.trim());
+    const challenge = [...this.store.passwordResetChallenges.values()].find((item) => item.tokenHash === tokenHash && !item.usedAt);
+    if (!challenge || Date.parse(challenge.expiresAt) <= Date.now()) {
+      throw new Error('Password reset token is invalid or expired.');
+    }
+    const user = this.store.users.get(challenge.userId);
+    if (!user) {
+      throw new Error('Password reset token is invalid or expired.');
+    }
+    challenge.usedAt = nowIso();
+    this.store.passwordHashesByUserId.set(user.id, this.hashPassword(password));
+    for (const session of this.store.sessions.values()) {
+      if (session.userId === user.id) {
+        session.revokedAt = challenge.usedAt;
+      }
+    }
+    return user;
   }
 
   authenticate(authorizationHeader?: string): AuthActor {
@@ -120,6 +197,9 @@ export class AuthService {
       if (!user) {
         throw new Error('Authentication is required.');
       }
+      if (user.suspendedAt) {
+        throw new Error('User account is suspended.');
+      }
       session.lastSeenAt = nowIso();
       return { user, session, platformAdmin: this.platformAdminForUser(user.id) };
     }
@@ -129,6 +209,9 @@ export class AuthService {
       const user = this.store.users.get(apiToken.userId);
       if (!user) {
         throw new Error('Authentication is required.');
+      }
+      if (user.suspendedAt) {
+        throw new Error('User account is suspended.');
       }
       apiToken.lastUsedAt = nowIso();
       return { user, apiToken, platformAdmin: this.platformAdminForUser(user.id) };
@@ -237,6 +320,34 @@ export class AuthService {
 
     const effectiveRole = roleAtLeast(userMembership.role, actor.apiToken.role) ? actor.apiToken.role : userMembership.role;
     return { ...userMembership, role: effectiveRole };
+  }
+
+
+  private requireSignupAllowed(inviteCode?: string): void {
+    if (this.store.users.size === 0) {
+      return;
+    }
+    if (this.signupMode === 'public') {
+      return;
+    }
+    const trimmed = inviteCode?.trim();
+    if (!trimmed || !this.inviteCodes.has(trimmed)) {
+      throw new Error('Public signup is disabled; a valid invite code is required.');
+    }
+  }
+
+  private createEmailVerificationChallenge(user: User): EmailVerificationChallenge & { token: string } {
+    const token = this.createOpaqueToken('verify');
+    const challenge: EmailVerificationChallenge = {
+      id: createId('email_verification'),
+      userId: user.id,
+      tokenHash: this.hashToken(token),
+      email: user.email,
+      createdAt: nowIso(),
+      expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS).toISOString(),
+    };
+    this.store.emailVerificationChallenges.set(challenge.id, challenge);
+    return { ...challenge, token };
   }
 
   private createSession(userId: string): { session: AuthSession; token: string } {

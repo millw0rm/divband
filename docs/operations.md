@@ -233,3 +233,60 @@ Recommended operational workflow:
 7. Use **Admin: abuse actions** to record warnings, suspensions, unsuspensions, or deployment restrictions. Every action should include a human-readable reason suitable for support review.
 
 Admin route reads and writes are audit-recorded with the actor ID and route path. Suspension state is stored on the target record while the abuse action remains immutable history, so incident reviews can reconstruct who acted, what changed, and why.
+
+## Backup and restore runbook
+
+Use this runbook before enabling public signup and after every persistence-schema change.
+
+1. Capture a database snapshot from the production persistence adapter and store it in the encrypted backup bucket with date, git SHA, and environment labels.
+2. Capture object-storage metadata for the `staging` and `sites` prefixes and verify that lifecycle policies do not delete live versions.
+3. Restore the database snapshot into an isolated restore environment with production secrets replaced by restore-only credentials.
+4. Run the automated restore check:
+
+   ```sh
+   npm run smoke:restore --workspace @divband/backend
+   ```
+
+5. Run a control-plane smoke test against the restored environment: register or invite a test user, verify email, create a project, attach the platform subdomain, and trigger a deployment.
+6. Compare restored counts for users, organizations, projects, domains, deployments, published sites, audit events, and abuse actions against the source snapshot.
+7. Record the restore duration, snapshot age, object-storage consistency result, and any skipped resources in the incident log.
+
+Restore tests must run on a schedule and after every production migration. A failed restore test blocks public signup and paid-plan upgrades.
+
+## Monitoring and alerting
+
+The platform-admin monitoring surface is `GET /admin/monitoring/signals`. Alerts must page or ticket on these components:
+
+### Auth monitoring
+
+Track registration spikes, login failures, email verification failures, password reset volume, rate-limit blocks, suspended-user access attempts, and session revocations. Page security for sustained credential-stuffing signals or reset-token abuse.
+
+### Deployment monitoring
+
+Track queued/running deployment age, failed deployments, rollback attempts, abuse-restricted projects, deployment rate-limit blocks, and monthly quota exhaustion. Page operations when production deployments fail repeatedly or remain queued beyond the SLO.
+
+### DNS monitoring
+
+Track unverified custom domains, duplicate hostname attempts, failed TXT verification, and verified domains whose records no longer point at the expected ingress. Ticket tenant-facing DNS drift and page for platform wildcard DNS failures.
+
+### Certificate monitoring
+
+Track requested, issued, failed, and near-expiry certificates. Page before expiration reaches the renewal SLO and immediately for issuance failures on active verified domains.
+
+### Runner monitoring
+
+Track runner registration, active job count, stale runners, failed jobs, untagged runner use, and projects without their expected runner tag. Page for degraded runner pools or deployment jobs running on unexpected tags.
+
+### Storage monitoring
+
+Track upload-plan expiry, missing objects, checksum mismatches, scanner failures, object-copy failures, bucket policy drift, backup completion, and restore-test success. Page for scanner bypass attempts, live object loss, or failed scheduled restore tests.
+
+## End-to-end public-signup smoke test
+
+Before switching `DIVBAND_SIGNUP_MODE=public`, run:
+
+```sh
+npm run smoke:controls --workspace @divband/backend
+```
+
+The smoke test covers invite-gated signup, email verification, login, project creation, platform-hostname attachment, deployment trigger, project-status live access, password reset, and post-reset login. Public signup remains invite-only until this smoke test and the restore smoke test pass in the target environment.
