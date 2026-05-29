@@ -1,0 +1,4 @@
+---
+ingress_controller: nginx
+ingress_nginx_manifest_url: https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/cloud/deploy.yaml
+ingress_class_name: nginx

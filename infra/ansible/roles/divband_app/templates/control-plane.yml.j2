@@ -1,0 +1,118 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ divband_namespace }}
+  labels:
+    app.kubernetes.io/part-of: divband
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: divband-backend
+  namespace: {{ divband_namespace }}
+  labels:
+    app.kubernetes.io/name: divband-backend
+    app.kubernetes.io/part-of: divband
+spec:
+  replicas: {{ divband_backend_replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: divband-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: divband-backend
+    spec:
+      containers:
+        - name: backend
+          image: {{ divband_backend_image }}
+          ports:
+            - containerPort: {{ divband_backend_port }}
+          env:
+{% for key, value in divband_app_env.items() %}
+            - name: {{ key }}
+              value: {{ value | string | to_json }}
+{% endfor %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: divband-backend
+  namespace: {{ divband_namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: divband-backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: {{ divband_backend_port }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: divband-frontend
+  namespace: {{ divband_namespace }}
+  labels:
+    app.kubernetes.io/name: divband-frontend
+    app.kubernetes.io/part-of: divband
+spec:
+  replicas: {{ divband_frontend_replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: divband-frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: divband-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: {{ divband_frontend_image }}
+          ports:
+            - containerPort: {{ divband_frontend_port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: divband-frontend
+  namespace: {{ divband_namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: divband-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: {{ divband_frontend_port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: divband-control-plane
+  namespace: {{ divband_namespace }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ cert_manager_cluster_issuer | default('letsencrypt-prod') }}
+spec:
+  ingressClassName: {{ ingress_class_name | default('nginx') }}
+  tls:
+    - hosts:
+        - {{ divband_public_hostname }}
+      secretName: divband-control-plane-tls
+  rules:
+    - host: {{ divband_public_hostname }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: divband-backend
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: divband-frontend
+                port:
+                  number: 80

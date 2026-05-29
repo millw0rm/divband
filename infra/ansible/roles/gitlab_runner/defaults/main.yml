@@ -1,0 +1,14 @@
+---
+gitlab_url: https://git.divband.ir
+gitlab_runner_package_name: gitlab-runner
+gitlab_runner_executor: kubernetes
+gitlab_runner_description: "{{ inventory_hostname }}"
+gitlab_runner_tags:
+  - divband
+gitlab_runner_locked: true
+gitlab_runner_run_untagged: false
+gitlab_runner_token: "{{ vault_gitlab_runner_token | default('REPLACE_WITH_RUNNER_AUTHENTICATION_TOKEN') }}"
+gitlab_runner_terraform_dir: "{{ playbook_dir }}/../../gitlab/terraform"
+gitlab_runner_project_key: ""
+gitlab_runner_kubernetes_namespace: gitlab-runners
+gitlab_runner_kubernetes_image: alpine:3.20
