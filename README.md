@@ -4,6 +4,10 @@
 
 The platform provisions a private GitLab project, isolated GitLab runner configuration, Kubernetes namespace, routing, TLS, and dashboard workspace for every hosted project.
 
+## Product planning
+
+- `docs/product.md` is the product source of truth for vision, MVP scope, user journeys, implementation status, backlog, open decisions, and release readiness. Start there when resuming product planning or prioritization.
+
 ## Repository map
 
 - `apps/backend` — platform API for project lifecycle, GitLab, Kubernetes, DNS, deployments, and AI-assisted change requests.
