@@ -8,3 +8,7 @@ kubernetes_k3s_channel: stable
 kubernetes_k3s_install_url: https://get.k3s.io
 kubernetes_join_token: "{{ vault_kubernetes_join_token | default('REPLACE_WITH_K3S_JOIN_TOKEN') }}"
 kubernetes_disable_builtin_ingress: true
+kubernetes_kubeconfig_remote_path: /etc/rancher/k3s/k3s.yaml
+kubernetes_kubeconfig_export_path: /etc/rancher/k3s/divband-kubeconfig.yaml
+kubernetes_kubeconfig_local_path: "{{ playbook_dir }}/../artifacts/kubeconfig"
+kubernetes_kubeconfig_context: divband-{{ divband_environment | default('production') }}

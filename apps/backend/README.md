@@ -31,7 +31,7 @@ The MVP runtime uses Node's built-in HTTP server, runs TypeScript with Node's bu
 | `UPLOAD_DOMAIN` | `uploads.localhost.test` | Domain for upload URLs; defaults to `PUBLIC_SITE_DOMAIN` if omitted. |
 | `DATABASE_URL` | `sqlite://./data/divband-backend.sqlite` | SQLite file for the MVP snapshot adapter; defaults to this value. |
 | `GITLAB_URL` | `https://gitlab.com` | GitLab instance base URL used by the GitLab service boundary. |
-| `KUBERNETES_CONFIG_MODE` | `disabled` | One of `disabled`, `in_cluster`, or `kubeconfig`. |
+| `KUBERNETES_CONFIG_MODE` / `KUBERNETES_MODE` | `disabled` | One of `disabled`, `in_cluster`, or `kubeconfig`; `KUBERNETES_MODE` is accepted for operator bootstrap hand-offs. |
 | `OBJECT_STORAGE_BUCKET` | `divband-local` | Object storage bucket for publish uploads. |
 | `OBJECT_STORAGE_ENDPOINT` | `http://localhost:9000` | Optional S3-compatible endpoint. |
 | `OBJECT_STORAGE_REGION` | `us-east-1` | Optional object storage region. |

@@ -38,10 +38,18 @@ tenants = {
         }
 
         secrets = {
+          # Preferred for the shared CI templates: base64 -w0 infra/ansible/artifacts/kubeconfig
           KUBE_CONFIG_B64 = {
             value     = "REPLACE_WITH_BASE64_KUBECONFIG"
             protected = true
             masked    = true
+          }
+
+          # Optional plain kubeconfig for jobs that expect GitLab's KUBE_CONFIG convention.
+          KUBE_CONFIG = {
+            value     = "REPLACE_WITH_RAW_KUBECONFIG"
+            protected = true
+            masked    = false
           }
         }
       }

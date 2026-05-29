@@ -33,7 +33,7 @@ export function loadBackendConfig(env: Record<string, string | undefined> = proc
     uploadDomain,
     databaseUrl: env.DATABASE_URL?.trim() || 'sqlite://./data/divband-backend.sqlite',
     gitLabUrl: env.GITLAB_URL?.trim() || 'https://gitlab.com',
-    kubernetesConfigMode: kubernetesMode(env.KUBERNETES_CONFIG_MODE),
+    kubernetesConfigMode: kubernetesMode(env.KUBERNETES_CONFIG_MODE ?? env.KUBERNETES_MODE),
     objectStorage: {
       endpoint: emptyToUndefined(env.OBJECT_STORAGE_ENDPOINT),
       region: emptyToUndefined(env.OBJECT_STORAGE_REGION),

@@ -34,6 +34,17 @@ spec:
             - name: {{ key }}
               value: {{ value | string | to_json }}
 {% endfor %}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: {{ divband_kubeconfig_mount_path | dirname }}
+              readOnly: true
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ divband_kubeconfig_secret_name }}
+            items:
+              - key: config
+                path: config
 ---
 apiVersion: v1
 kind: Service

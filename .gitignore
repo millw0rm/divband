@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 .env.*
+infra/ansible/inventory.yml
+infra/ansible/artifacts/
