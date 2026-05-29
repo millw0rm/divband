@@ -21,6 +21,20 @@ That means the project is ready for an **operator-run MVP pilot** after real env
 | Tenant runtime templates | Ready as templates | `infra/k8s/base` contains namespace, quota, RBAC, network policy, workload, ingress, certificate, and ExternalSecret templates. |
 | Reference architecture | Documented | `docs/vm-reference-architecture.md` describes minimal and production-oriented VM layouts and maps them to Ansible groups. |
 
+
+## Kubernetes infrastructure recommendation
+
+For this project, use **k3s for the VM-based MVP pilot**. Do not use minikube for persistent customer-facing infrastructure, and do not start with Kubespray unless the immediate goal is a larger kubeadm-style production cluster with a dedicated operations team.
+
+| Option | Recommendation for Divband | Why | When to use it |
+| --- | --- | --- | --- |
+| k3s | **Default for VM-IP MVP** | Lightweight, fast to bootstrap on VPS/cloud-computer VMs, supports multi-node clusters, ingress, cert-manager, External Secrets, namespaces, RBAC, and network policies with much less operational weight than kubeadm/Kubespray. | Operator-run MVP pilots, private alpha, small production-like environments where simplicity matters. |
+| minikube | **Local development only** | Excellent for a single developer machine, but it is not designed as the persistent multi-tenant runtime for real customer workloads, GitLab deployments, TLS, DNS, and node lifecycle operations. | Local demos and developer smoke tests. |
+| Kubespray | **Defer until production scale needs it** | Powerful and mature for kubeadm-based clusters, but it adds inventory complexity, more moving parts, upgrade planning, and operational burden before Divband has proven product-market and traffic needs. | Later private-alpha/production migration when you need a more standard Kubernetes distribution, HA control plane discipline, explicit etcd/networking choices, or a team comfortable operating kubeadm clusters. |
+| Managed Kubernetes | **Best long-term business path when budget/provider choice is clear** | Removes much of the cluster lifecycle burden, but depends on a cloud/provider decision and can increase monthly cost. | Public MVP or production if you want to focus on Divband product features instead of cluster operations. |
+
+The current Ansible implementation intentionally matches this recommendation: the Kubernetes role defaults to `k3s`, and the role fails for other distributions until another implementation is explicitly added. That keeps the MVP path simple while preserving a future migration path to Kubespray, kubeadm, or managed Kubernetes.
+
 ## Values required before running on real VMs
 
 Before running `ansible-playbook -i inventory.yml playbooks/site.yml`, configure these with real values:
