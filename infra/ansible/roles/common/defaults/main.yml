@@ -1,5 +1,9 @@
 ---
 divband_timezone: UTC
+common_dns_resolvers: []
+common_dns_fallback_resolvers: []
+common_dns_domains: []
+common_configure_systemd_resolved: false
 common_base_packages:
   - ca-certificates
   - curl

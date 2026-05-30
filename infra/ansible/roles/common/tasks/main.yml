@@ -21,6 +21,49 @@
     state: started
   when: ansible_service_mgr == 'systemd'
 
+- name: Fail when systemd-resolved DNS is requested on unsupported hosts
+  ansible.builtin.fail:
+    msg: >-
+      common_configure_systemd_resolved requires a systemd host because it writes
+      /etc/systemd/resolved.conf.d/divband.conf and restarts systemd-resolved.
+  when:
+    - common_configure_systemd_resolved | bool
+    - common_dns_resolvers | length > 0
+    - ansible_service_mgr != 'systemd'
+
+- name: Create systemd-resolved drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - common_configure_systemd_resolved | bool
+    - common_dns_resolvers | length > 0
+    - ansible_service_mgr == 'systemd'
+
+- name: Configure systemd-resolved DNS servers
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/divband.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Resolve]
+      DNS={{ common_dns_resolvers | join(' ') }}
+      {% if common_dns_fallback_resolvers | length > 0 %}
+      FallbackDNS={{ common_dns_fallback_resolvers | join(' ') }}
+      {% endif %}
+      {% if common_dns_domains | length > 0 %}
+      Domains={{ common_dns_domains | join(' ') }}
+      {% endif %}
+  notify: Restart systemd-resolved
+  when:
+    - common_configure_systemd_resolved | bool
+    - common_dns_resolvers | length > 0
+    - ansible_service_mgr == 'systemd'
+
 - name: Create platform admin users
   ansible.builtin.user:
     name: "{{ item.name }}"
