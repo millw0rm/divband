@@ -113,6 +113,7 @@ Required or commonly customized variables:
 | `public_ingress_target` | Inventory group name, or explicit backend list, that HAProxy uses for ingress HTTP/HTTPS backends. Defaults to `k8s_workers`. |
 | `ingress_nginx_service_type`, `ingress_nginx_http_node_port`, `ingress_nginx_https_node_port` | Expose ingress-nginx on stable node ports for the HAProxy path; defaults are `NodePort`, `32080`, and `32443`. |
 | `public_vip` | Optional per-load-balancer floating address managed by keepalived. Point platform DNS and `kubernetes_api_endpoint` at this value when using a VIP. |
+| `common_configure_systemd_resolved`, `common_dns_resolvers`, `common_dns_fallback_resolvers`, `common_dns_domains` | Optional host-level DNS resolver settings for systemd-resolved. Use these only when the VMs need specific recursive resolvers or search/routing domains. |
 | `kubernetes_kubeconfig_local_path` | Local operator artifact path for the collected kubeconfig; defaults to `infra/ansible/artifacts/kubeconfig`. |
 | `kubernetes_kubeconfig_context` | Context name written into the collected kubeconfig. |
 | `cert_manager_acme_email`, `cert_manager_acme_server`, `cert_manager_cluster_issuer` | ACME account and issuer settings. |
@@ -124,6 +125,12 @@ Required or commonly customized variables:
 | `gitlab_runner_token` / `vault_gitlab_runner_token` | Runner authentication token created by Terraform GitLab provisioning. Use Vault/platform secrets for normal runs; the role can also read `runner_authentication_tokens` from Terraform outputs when `gitlab_runner_project_key` is set. |
 | `gitlab_runner_allow_terraform_token_lookup` | Defaults to `true`; when no Vault token is present, allows the runner role to query Terraform outputs on the Ansible controller. Set to `false` if runners must only consume Vault-provided tokens. |
 | `gitlab_runner_tags` | Optional override for runner tags. Leave empty to use the project-specific `divband-*` tag exported by Terraform. |
+
+### Host resolver DNS
+
+Set `common_configure_systemd_resolved: true` with a non-empty `common_dns_resolvers` list when the VMs themselves must use specific recursive DNS resolvers, for example provider-approved resolvers or private resolvers reachable from the host network. On systemd hosts, the `common` role writes `/etc/systemd/resolved.conf.d/divband.conf` and restarts `systemd-resolved`. `common_dns_fallback_resolvers` and `common_dns_domains` are optional and map to systemd-resolved `FallbackDNS=` and `Domains=` entries.
+
+This option controls host or VM name resolution before and outside Kubernetes. It does not create or update public platform DNS records such as `divband_public_hostname`, tenant domains, or load-balancer records, and it does not configure Kubernetes CoreDNS behavior inside the cluster. Manage public records with your DNS provider and manage cluster DNS with Kubernetes/CoreDNS configuration if those behaviors need to change.
 
 ### Divband backend GitLab secret handoff
 
