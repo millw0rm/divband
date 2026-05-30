@@ -100,6 +100,80 @@ Use the groups consistently:
 
 Set non-secret variables in `inventory.yml`, `group_vars/all.yml`, or environment-specific group vars. Put secrets in Ansible Vault, your CI secret store, or your operator password manager.
 
+### Production inventory checklist
+
+Before running [`scripts/deploy-production.sh`](../../scripts/deploy-production.sh) or `make deploy-production`, verify that `infra/ansible/inventory.yml` or the environment-specific inventory/group vars contain the production values below. These are the exact locations where operators normally put VM IPs, SSH keys, DNS resolvers, and application image references.
+
+| Field | Where to set it | Production value to provide |
+| --- | --- | --- |
+| `ansible_user` | `all.vars`, group vars, or host vars | SSH login user that exists on every VM. |
+| `ansible_ssh_private_key_file` | `all.vars`, group vars, or host vars | Path on the operator workstation or CI runner to the private key used for VM access. Do not commit private keys. |
+| `ansible_host` under `k8s_control_plane` | Each host in the `k8s_control_plane.hosts` map | Control-plane VM IP address or DNS name. |
+| `ansible_host` under `k8s_workers` | Each host in the `k8s_workers.hosts` map | Worker VM IP address or DNS name. |
+| `ansible_host` under `load_balancers` | Each host in the `load_balancers.hosts` map | HAProxy/keepalived VM IP address or DNS name. |
+| `ansible_host` under `gitlab` | Each host in the `gitlab.hosts` map | Self-hosted GitLab VM IP/DNS name, or the VM that represents the existing GitLab integration endpoint. |
+| `ansible_host` under `runners` | Each host in the `runners.hosts` map | GitLab Runner VM IP address or DNS name. |
+| `ansible_host` under `monitoring` | Each host in the `monitoring.hosts` map | Monitoring VM IP address or DNS name. |
+| `public_vip` | `load_balancers.vars` or a load-balancer host var | Floating public address managed by keepalived. Point platform DNS at this address when using HA. |
+| `kubernetes_api_endpoint` | `all.vars` or environment group vars | Stable API URL, normally `https://<public_vip-or-lb-dns>:6443`; workers and collected kubeconfigs use this value. |
+| `common_configure_systemd_resolved` | `all.vars` or host/group vars | Set to `true` only when Ansible should manage VM resolver configuration through systemd-resolved. |
+| `common_dns_resolvers` | `all.vars` or host/group vars | Recursive DNS resolver IPs that each VM should use when `common_configure_systemd_resolved: true`. |
+| `divband_backend_image_repository` | `all.vars`, environment group vars, or `DIVBAND_BACKEND_IMAGE_REPOSITORY` for the wrapper | Backend image repository that k3s pulls, for example `registry.gitlab.com/divband/control-plane/backend`. |
+| `divband_frontend_image_repository` | `all.vars`, environment group vars, or `DIVBAND_FRONTEND_IMAGE_REPOSITORY` for the wrapper | Frontend image repository that k3s pulls, for example `registry.gitlab.com/divband/control-plane/frontend`. |
+| `divband_image_tag` | `all.vars`, environment group vars, or `TAG`/`DIVBAND_IMAGE_TAG` for the wrapper | Immutable image tag to deploy, for example a Git SHA or release tag. |
+
+Minimal production inventory shape:
+
+```yaml
+all:
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: ~/.ssh/divband-production
+    kubernetes_api_endpoint: https://203.0.113.10:6443
+    common_configure_systemd_resolved: true
+    common_dns_resolvers:
+      - 178.22.122.100
+      - 185.51.200.2
+    divband_backend_image_repository: registry.gitlab.com/divband/control-plane/backend
+    divband_frontend_image_repository: registry.gitlab.com/divband/control-plane/frontend
+    divband_image_tag: v1.0.0
+
+k8s_control_plane:
+  hosts:
+    cp-1:
+      ansible_host: 10.0.10.11
+k8s_workers:
+  hosts:
+    worker-1:
+      ansible_host: 10.0.10.21
+load_balancers:
+  vars:
+    public_vip: 203.0.113.10
+  hosts:
+    lb-1:
+      ansible_host: 10.0.40.11
+gitlab:
+  hosts:
+    gitlab-1:
+      ansible_host: 10.0.20.11
+runners:
+  hosts:
+    runner-1:
+      ansible_host: 10.0.30.11
+monitoring:
+  hosts:
+    monitoring-1:
+      ansible_host: 10.0.50.11
+```
+
+The monorepo is **not copied to each VM** during production deployment. Build and push backend/frontend container images first, then run Ansible with `divband_backend_image_repository`, `divband_frontend_image_repository`, and `divband_image_tag` pointing at those pushed images. The `divband_app` role renders Kubernetes manifests with those image references, and k3s pulls the images from the registry onto the cluster nodes. The wrapper command performs the build/push/deploy sequence for you:
+
+```sh
+REGISTRY=registry.gitlab.com/divband/control-plane TAG=v1.0.0 ./scripts/deploy-production.sh
+# or
+make deploy-production REGISTRY=registry.gitlab.com/divband/control-plane TAG=v1.0.0
+```
+
 Required or commonly customized variables:
 
 | Variable | Purpose |
